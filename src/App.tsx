@@ -571,7 +571,6 @@ function App() {
             <div className="panel-header">
               <div>
                 <h2>Map</h2>
-                <p>Displays the `MINIMAP` MSDP value only.</p>
               </div>
             </div>
 

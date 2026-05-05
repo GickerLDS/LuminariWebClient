@@ -63,6 +63,7 @@
 .connection-form button,
 .command-form button {
   align-self: end;
+  height: 100%;
 }
 
 .connection-form-help {
