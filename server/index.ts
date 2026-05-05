@@ -122,6 +122,10 @@ app.get('/health', (_request, response) => {
   response.json({ ok: true })
 })
 
+app.get('/api/settings', (_request, response) => {
+  response.json(appSettings)
+})
+
 app.use(express.static(clientDist))
 
 app.get(/^(?!\/ws).*/, (_request, response) => {

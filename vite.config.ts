@@ -11,6 +11,9 @@ export default defineConfig({
     port: appSettings.ports.client,
     strictPort: true,
     proxy: {
+      '/api/settings': {
+        target: `http://127.0.0.1:${appSettings.ports.server}`,
+      },
       '/ws': {
         target: `ws://127.0.0.1:${appSettings.ports.server}`,
         ws: true,

@@ -2,6 +2,7 @@ import AnsiToHtml from 'ansi-to-html'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { appSettings } from '../shared/app-settings.ts'
+import type { AppSettings } from '../shared/app-settings.ts'
 import type {
   ClientMessage,
   ConnectionStatus,
@@ -12,7 +13,6 @@ import './App.css'
 
 const DEFAULT_HOST = appSettings.connection.defaultHost
 const DEFAULT_PORT = appSettings.connection.defaultPort
-const MUD_PRESETS = appSettings.connection.muds
 const CUSTOM_MUD_VALUE = '__custom__'
 const TERMINAL_CHUNK_LIMIT = 500
 const COMMAND_HISTORY_LIMIT = 100
@@ -108,11 +108,12 @@ type BarConfig = {
 }
 
 function App() {
+  const [uiSettings, setUiSettings] = useState<AppSettings>(appSettings)
   const [mudState, setMudState] = useState<MudState>({})
   const [host, setHost] = useState(DEFAULT_HOST)
   const [port, setPort] = useState(DEFAULT_PORT)
   const [selectedMudId, setSelectedMudId] = useState(
-    findMatchingMudPresetId(DEFAULT_HOST, DEFAULT_PORT) ?? CUSTOM_MUD_VALUE,
+    findMatchingMudPresetId(appSettings.connection.muds, DEFAULT_HOST, DEFAULT_PORT) ?? CUSTOM_MUD_VALUE,
   )
   const [command, setCommand] = useState('')
   const [commandHistory, setCommandHistory] = useState<string[]>([])
@@ -130,7 +131,44 @@ function App() {
   const ansiConverterRef = useRef(createAnsiConverter())
 
   useEffect(() => {
-    document.title = appSettings.personalization.browserTitle
+    document.title = uiSettings.personalization.browserTitle
+  }, [uiSettings.personalization.browserTitle])
+
+  useEffect(() => {
+    let active = true
+
+    async function loadSettings() {
+      try {
+        const response = await fetch(getSettingsUrl())
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const settings = (await response.json()) as AppSettings
+        if (!active) {
+          return
+        }
+
+        setUiSettings(settings)
+        setHost(settings.connection.defaultHost)
+        setPort(settings.connection.defaultPort)
+        setSelectedMudId(
+          findMatchingMudPresetId(
+            settings.connection.muds,
+            settings.connection.defaultHost,
+            settings.connection.defaultPort,
+          ) ?? CUSTOM_MUD_VALUE,
+        )
+      } catch (error) {
+        console.error('Failed to load app settings from /api/settings', error)
+      }
+    }
+
+    void loadSettings()
+
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
@@ -238,8 +276,8 @@ function App() {
   const connected = status === 'connected'
   const mapOutput = useMemo(() => buildMapOutput(mudState), [mudState])
   const selectedMudPreset = useMemo(
-    () => MUD_PRESETS.find((mud) => mud.id === selectedMudId),
-    [selectedMudId],
+    () => uiSettings.connection.muds.find((mud) => mud.id === selectedMudId),
+    [selectedMudId, uiSettings.connection.muds],
   )
 
   const sendMessage = useCallback((message: ClientMessage) => {
@@ -349,7 +387,7 @@ function App() {
       return
     }
 
-    const preset = MUD_PRESETS.find((mud) => mud.id === mudId)
+    const preset = uiSettings.connection.muds.find((mud) => mud.id === mudId)
     if (!preset) {
       return
     }
@@ -360,12 +398,16 @@ function App() {
 
   function handleHostChange(nextHost: string) {
     setHost(nextHost)
-    setSelectedMudId(findMatchingMudPresetId(nextHost, port) ?? CUSTOM_MUD_VALUE)
+    setSelectedMudId(
+      findMatchingMudPresetId(uiSettings.connection.muds, nextHost, port) ?? CUSTOM_MUD_VALUE,
+    )
   }
 
   function handlePortChange(nextPort: number) {
     setPort(nextPort)
-    setSelectedMudId(findMatchingMudPresetId(host, nextPort) ?? CUSTOM_MUD_VALUE)
+    setSelectedMudId(
+      findMatchingMudPresetId(uiSettings.connection.muds, host, nextPort) ?? CUSTOM_MUD_VALUE,
+    )
   }
 
   function handleCommandSubmit(event: FormEvent<HTMLFormElement>) {
@@ -430,19 +472,19 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">{appSettings.personalization.eyebrow}</p>
-          <h1>{appSettings.personalization.title}</h1>
-          <p className="subtitle">{appSettings.personalization.subtitle}</p>
+          <p className="eyebrow">{uiSettings.personalization.eyebrow}</p>
+          <h1>{uiSettings.personalization.title}</h1>
+          <p className="subtitle">{uiSettings.personalization.subtitle}</p>
         </div>
 
         <form className="connection-form panel" onSubmit={handleConnectionSubmit}>
-          {MUD_PRESETS.length > 0 ? (
+          {uiSettings.connection.muds.length > 0 ? (
             <label>
               <span>MUD</span>
               <select value={selectedMudId} onChange={(event) => handleMudPresetChange(event.target.value)}>
-                {MUD_PRESETS.map((mud) => (
+                {uiSettings.connection.muds.map((mud) => (
                   <option key={mud.id} value={mud.id}>
-                    {mud.name} ({mud.host}:{mud.port})
+                    {mud.name}
                   </option>
                 ))}
                 <option value={CUSTOM_MUD_VALUE}>Custom</option>
@@ -636,6 +678,10 @@ function getWebSocketUrl() {
   return `${protocol}//${window.location.host}/ws`
 }
 
+function getSettingsUrl() {
+  return '/api/settings'
+}
+
 function parseServerMessage(data: unknown): ServerMessage | null {
   if (typeof data !== 'string') {
     return null
@@ -678,8 +724,8 @@ function buildMapOutput(mudState: MudState) {
   return 'Waiting for MINIMAP MSDP data.'
 }
 
-function findMatchingMudPresetId(host: string, port: number) {
-  return MUD_PRESETS.find(
+function findMatchingMudPresetId(mudPresets: AppSettings['connection']['muds'], host: string, port: number) {
+  return mudPresets.find(
     (mud) => mud.host.toLowerCase() === host.trim().toLowerCase() && mud.port === port,
   )?.id
 }

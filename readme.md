@@ -120,6 +120,8 @@ The main app settings file is:
 shared/app-settings.ts
 ```
 
+The browser now loads these settings from the server at runtime through `/api/settings`, so changes to MUD presets, defaults, and personalization are picked up after restarting the server. A full frontend rebuild is not required just to update the dropdown list or branding text.
+
 It contains:
 
 - **ports.client** - Vite dev server port
