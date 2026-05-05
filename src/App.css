@@ -39,10 +39,10 @@
 
 .connection-form {
   display: grid;
-  grid-template-columns: minmax(16rem, 20rem) 8rem auto;
+  grid-template-columns: minmax(13rem, 16rem) minmax(14rem, 18rem) 8rem auto;
   gap: 0.9rem;
   padding: 1rem;
-  min-width: 34rem;
+  min-width: 48rem;
 }
 
 .connection-form label,
@@ -63,6 +63,11 @@
 .connection-form button,
 .command-form button {
   align-self: end;
+}
+
+.connection-form-help {
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .status-row {
@@ -107,7 +112,7 @@
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
   flex: 1;
   gap: 1rem;
   min-height: 0;
@@ -327,7 +332,7 @@
 
   .connection-form {
     min-width: 0;
-    grid-template-columns: 1fr 8rem auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 8rem auto;
   }
 
   .sidebar {

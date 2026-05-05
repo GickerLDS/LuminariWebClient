@@ -54,7 +54,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -81,7 +82,8 @@ button:disabled {
   cursor: not-allowed;
 }
 
-input {
+input,
+select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 0.85rem;
@@ -90,7 +92,8 @@ input {
   color: var(--text);
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: 2px solid rgba(168, 85, 247, 0.5);
   outline-offset: 1px;
 }

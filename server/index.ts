@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { RawData } from 'ws'
+import { appSettings } from '../shared/app-settings.ts'
 import type { ClientMessage, ConnectionStatus, MudState, MudValue, ServerMessage } from '../shared/mud.ts'
 
 const IAC = 255
@@ -155,7 +156,7 @@ wss.on('connection', (socket) => {
   })
 })
 
-const port = Number(process.env.PORT ?? '3210')
+const port = Number(process.env.PORT ?? appSettings.ports.server)
 server.listen(port, () => {
   console.log(`LuminariWebClient proxy listening on http://localhost:${port}`)
 })

@@ -1,6 +1,7 @@
 import AnsiToHtml from 'ansi-to-html'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { appSettings } from '../shared/app-settings.ts'
 import type {
   ClientMessage,
   ConnectionStatus,
@@ -9,10 +10,56 @@ import type {
 } from '../shared/mud.ts'
 import './App.css'
 
-const DEFAULT_HOST = import.meta.env.VITE_DEFAULT_MUD_HOST ?? 'LuminariMUD.com'
-const DEFAULT_PORT = Number(import.meta.env.VITE_DEFAULT_MUD_PORT ?? '4100')
+const DEFAULT_HOST = appSettings.connection.defaultHost
+const DEFAULT_PORT = appSettings.connection.defaultPort
+const MUD_PRESETS = appSettings.connection.muds
+const CUSTOM_MUD_VALUE = '__custom__'
 const TERMINAL_CHUNK_LIMIT = 500
 const COMMAND_HISTORY_LIMIT = 100
+const LUMINARI_COLOR_CHAR = '^'
+const LUMINARI_COLOR_CODES: Record<string, string> = {
+  n: '\u001b[0;00m',
+  d: luminariRgbToAnsi('F000'),
+  D: luminariRgbToAnsi('F111'),
+  '1': luminariRgbToAnsi('F022'),
+  '2': luminariRgbToAnsi('F055'),
+  '3': luminariRgbToAnsi('F555'),
+  r: luminariRgbToAnsi('F200'),
+  R: luminariRgbToAnsi('F500'),
+  g: luminariRgbToAnsi('F020'),
+  G: luminariRgbToAnsi('F050'),
+  y: luminariRgbToAnsi('F220'),
+  Y: luminariRgbToAnsi('F550'),
+  b: luminariRgbToAnsi('F002'),
+  B: luminariRgbToAnsi('F005'),
+  m: luminariRgbToAnsi('F202'),
+  M: luminariRgbToAnsi('F505'),
+  c: luminariRgbToAnsi('F022'),
+  C: luminariRgbToAnsi('F055'),
+  w: luminariRgbToAnsi('F222'),
+  W: luminariRgbToAnsi('F555'),
+  a: luminariRgbToAnsi('F014'),
+  A: luminariRgbToAnsi('F025'),
+  j: luminariRgbToAnsi('F031'),
+  J: luminariRgbToAnsi('F142'),
+  l: luminariRgbToAnsi('F140'),
+  L: luminariRgbToAnsi('F250'),
+  o: luminariRgbToAnsi('F520'),
+  O: luminariRgbToAnsi('F530'),
+  p: luminariRgbToAnsi('F301'),
+  P: luminariRgbToAnsi('F413'),
+  s: luminariRgbToAnsi('F300'),
+  S: luminariRgbToAnsi('F411'),
+  t: luminariRgbToAnsi('F320'),
+  T: luminariRgbToAnsi('F431'),
+  v: luminariRgbToAnsi('F104'),
+  V: luminariRgbToAnsi('F215'),
+  _: '\u001b[4m',
+  '+': '\u001b[1m',
+  '-': '\u001b[5m',
+  '=': '\u001b[7m',
+  '*': '@',
+}
 const MOVEMENT_COMMANDS = new Set([
   'n',
   'north',
@@ -64,6 +111,9 @@ function App() {
   const [mudState, setMudState] = useState<MudState>({})
   const [host, setHost] = useState(DEFAULT_HOST)
   const [port, setPort] = useState(DEFAULT_PORT)
+  const [selectedMudId, setSelectedMudId] = useState(
+    findMatchingMudPresetId(DEFAULT_HOST, DEFAULT_PORT) ?? CUSTOM_MUD_VALUE,
+  )
   const [command, setCommand] = useState('')
   const [commandHistory, setCommandHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
@@ -78,6 +128,10 @@ function App() {
   const terminalRef = useRef<HTMLDivElement | null>(null)
   const commandInputRef = useRef<HTMLInputElement | null>(null)
   const ansiConverterRef = useRef(createAnsiConverter())
+
+  useEffect(() => {
+    document.title = appSettings.personalization.browserTitle
+  }, [])
 
   useEffect(() => {
     const socket = new WebSocket(getWebSocketUrl())
@@ -183,6 +237,10 @@ function App() {
   const canConnect = proxyReady && status !== 'connecting'
   const connected = status === 'connected'
   const mapOutput = useMemo(() => buildMapOutput(mudState), [mudState])
+  const selectedMudPreset = useMemo(
+    () => MUD_PRESETS.find((mud) => mud.id === selectedMudId),
+    [selectedMudId],
+  )
 
   const sendMessage = useCallback((message: ClientMessage) => {
     const socket = socketRef.current
@@ -285,6 +343,31 @@ function App() {
     sendMessage({ type: 'connect', host, port })
   }
 
+  function handleMudPresetChange(mudId: string) {
+    setSelectedMudId(mudId)
+    if (mudId === CUSTOM_MUD_VALUE) {
+      return
+    }
+
+    const preset = MUD_PRESETS.find((mud) => mud.id === mudId)
+    if (!preset) {
+      return
+    }
+
+    setHost(preset.host)
+    setPort(preset.port)
+  }
+
+  function handleHostChange(nextHost: string) {
+    setHost(nextHost)
+    setSelectedMudId(findMatchingMudPresetId(nextHost, port) ?? CUSTOM_MUD_VALUE)
+  }
+
+  function handlePortChange(nextPort: number) {
+    setPort(nextPort)
+    setSelectedMudId(findMatchingMudPresetId(host, nextPort) ?? CUSTOM_MUD_VALUE)
+  }
+
   function handleCommandSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
@@ -347,18 +430,32 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">LuminariWebClient</p>
-          <h1>Web MUD client with MSDP-driven HUD</h1>
-          <p className="subtitle">
-            Telnet is bridged through a local WebSocket proxy so the browser can render terminal
-            output, stats, bars, and the Luminari room map.
-          </p>
+          <p className="eyebrow">{appSettings.personalization.eyebrow}</p>
+          <h1>{appSettings.personalization.title}</h1>
+          <p className="subtitle">{appSettings.personalization.subtitle}</p>
         </div>
 
         <form className="connection-form panel" onSubmit={handleConnectionSubmit}>
+          {MUD_PRESETS.length > 0 ? (
+            <label>
+              <span>MUD</span>
+              <select value={selectedMudId} onChange={(event) => handleMudPresetChange(event.target.value)}>
+                {MUD_PRESETS.map((mud) => (
+                  <option key={mud.id} value={mud.id}>
+                    {mud.name} ({mud.host}:{mud.port})
+                  </option>
+                ))}
+                <option value={CUSTOM_MUD_VALUE}>Custom</option>
+              </select>
+              {selectedMudPreset?.description ? (
+                <small className="connection-form-help">{selectedMudPreset.description}</small>
+              ) : null}
+            </label>
+          ) : null}
+
           <label>
             <span>Host</span>
-            <input value={host} onChange={(event) => setHost(event.target.value)} />
+            <input value={host} onChange={(event) => handleHostChange(event.target.value)} />
           </label>
 
           <label>
@@ -366,7 +463,7 @@ function App() {
             <input
               inputMode="numeric"
               value={port}
-              onChange={(event) => setPort(Number(event.target.value) || DEFAULT_PORT)}
+              onChange={(event) => handlePortChange(Number(event.target.value) || DEFAULT_PORT)}
             />
           </label>
 
@@ -436,7 +533,7 @@ function App() {
               </div>
             </div>
 
-            <pre className="minimap">{mapOutput}</pre>
+            <pre className="minimap" dangerouslySetInnerHTML={{ __html: renderMudHtml(mapOutput) }} />
           </section>
 
           <section className="panel">
@@ -448,12 +545,20 @@ function App() {
             </div>
 
             <div className="identity-block">
-              <strong>{mudState.characterName ?? 'Unknown adventurer'}</strong>
-              <span>
-                {[mudState.level ? `Level ${mudState.level}` : undefined, mudState.race, mudState.className]
-                  .filter(Boolean)
-                  .join(' · ') || 'Awaiting MSDP profile'}
-              </span>
+              <strong
+                dangerouslySetInnerHTML={{
+                  __html: renderMudHtml(mudState.characterName ?? 'Unknown adventurer'),
+                }}
+              />
+              <span
+                dangerouslySetInnerHTML={{
+                  __html: renderMudHtml(
+                    [mudState.level ? `Level ${mudState.level}` : undefined, mudState.race, mudState.className]
+                      .filter(Boolean)
+                      .join(' · ') || 'Awaiting MSDP profile',
+                  ),
+                }}
+              />
             </div>
 
             <dl className="stats-grid">
@@ -505,10 +610,19 @@ type StatProps = {
 }
 
 function Stat({ label, value }: StatProps) {
+  if (typeof value === 'string') {
+    return (
+      <>
+        <dt>{label}</dt>
+        <dd dangerouslySetInnerHTML={{ __html: renderMudHtml(value || '—') }} />
+      </>
+    )
+  }
+
   return (
     <>
       <dt>{label}</dt>
-      <dd>{value !== undefined && value !== '' ? value : '—'}</dd>
+      <dd>{value !== undefined ? value : '—'}</dd>
     </>
   )
 }
@@ -562,6 +676,78 @@ function buildMapOutput(mudState: MudState) {
   }
 
   return 'Waiting for MINIMAP MSDP data.'
+}
+
+function findMatchingMudPresetId(host: string, port: number) {
+  return MUD_PRESETS.find(
+    (mud) => mud.host.toLowerCase() === host.trim().toLowerCase() && mud.port === port,
+  )?.id
+}
+
+function renderMudHtml(value: string) {
+  return new AnsiToHtml({ escapeXML: true }).toHtml(convertLuminariColorCodes(value))
+}
+
+function convertLuminariColorCodes(value: string) {
+  let converted = ''
+
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value[index]
+    if (current !== LUMINARI_COLOR_CHAR) {
+      converted += current
+      continue
+    }
+
+    const next = value[index + 1]
+    if (!next) {
+      converted += current
+      continue
+    }
+
+    if (next === LUMINARI_COLOR_CHAR) {
+      converted += LUMINARI_COLOR_CHAR
+      index += 1
+      continue
+    }
+
+    if (next === '[') {
+      const endIndex = value.indexOf(']', index + 2)
+      if (endIndex > index + 2) {
+        const luminariRgb = value.slice(index + 2, endIndex)
+        const ansiColor = luminariRgbToAnsi(luminariRgb)
+        if (ansiColor) {
+          converted += ansiColor
+          index = endIndex
+          continue
+        }
+      }
+    }
+
+    const luminariColor = LUMINARI_COLOR_CODES[next]
+    if (luminariColor !== undefined) {
+      converted += luminariColor
+      index += 1
+      continue
+    }
+
+    converted += current
+  }
+
+  return converted
+}
+
+function luminariRgbToAnsi(code: string) {
+  if (!/^[FfBb][0-5]{3}$/.test(code)) {
+    return ''
+  }
+
+  const isBackground = code[0].toLowerCase() === 'b'
+  const [red, green, blue] = code
+    .slice(1)
+    .split('')
+    .map((value) => Number(value) * 51)
+
+  return `\u001b[${isBackground ? 48 : 38};2;${red};${green};${blue}m`
 }
 
 function focusCommandInput(input: HTMLInputElement | null) {
