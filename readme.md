@@ -159,24 +159,44 @@ export const appSettings = {
     preview: 4173,
   },
   connection: {
-    defaultHost: 'LuminariMUD.com',
-    defaultPort: 4100,
+    defaultHost: 'krynn.d20mud.com',
+    defaultPort: 4300,
     muds: [
+      {
+        id: 'krynn',
+        name: 'Chronicles of Krynn',
+        host: 'krynn.d20mud.com',
+        port: 4300,
+        description: 'Post War of the Lance Dragonlance RP and Adventuring.',
+      },
       {
         id: 'luminari',
         name: 'LuminariMUD',
         host: 'LuminariMUD.com',
         port: 4100,
-        description: 'Main public LuminariMUD server',
+        description: 'MUD running the LuminariMUD codebase in the world of Lumia.',
+      },
+      {
+        id: 'faerun',
+        name: 'Faerun: A Forgotten Realms MUD',
+        host: 'faerun.d20mud.com',
+        port: 3100,
+        description: 'Forgotten Realms Adventuring in Western Faerun.',
+      },
+      {
+        id: 'starwars',
+        name: 'd20MUD: Star Wars',
+        host: 'starwars.d20mud.com',
+        port: 5500,
+        description: 'Galactic Empire Star Wars using d20-based rules.',
       },
     ],
   },
   personalization: {
-    browserTitle: 'LuminariWebClient',
-    eyebrow: 'LuminariWebClient',
-    title: 'Web MUD client with MSDP-driven HUD',
-    subtitle:
-      'Telnet is bridged through a local WebSocket proxy so the browser can render terminal output, stats, bars, and the Luminari room map.',
+    browserTitle: 'd20MUD Web Clients',
+    eyebrow: '',
+    title: 'd20MUD Web Clients',
+    subtitle: '',
   },
 }
 ```
