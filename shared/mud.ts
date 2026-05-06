@@ -27,6 +27,12 @@ export interface MudState {
   experienceTnl?: number
   attackBonus?: number
   damageBonus?: number
+  strength?: number
+  dexterity?: number
+  constitution?: number
+  intelligence?: number
+  wisdom?: number
+  charisma?: number
   armorClass?: number
   alignment?: string
   practice?: number

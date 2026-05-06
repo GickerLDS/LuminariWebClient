@@ -53,6 +53,18 @@ const REPORTABLE_VARIABLES = [
   'EXPERIENCE',
   'EXPERIENCE_MAX',
   'EXPERIENCE_TNL',
+  'STR',
+  'DEX',
+  'CON',
+  'INT',
+  'WIS',
+  'CHA',
+  'STRENGTH',
+  'DEXTERITY',
+  'CONSTITUTION',
+  'INTELLIGENCE',
+  'WISDOM',
+  'CHARISMA',
   'ATTACK_BONUS',
   'DAMAGE_BONUS',
   'AC',
@@ -88,6 +100,18 @@ const REFRESHABLE_VARIABLES = [
   'EXPERIENCE',
   'EXPERIENCE_MAX',
   'EXPERIENCE_TNL',
+  'STR',
+  'DEX',
+  'CON',
+  'INT',
+  'WIS',
+  'CHA',
+  'STRENGTH',
+  'DEXTERITY',
+  'CONSTITUTION',
+  'INTELLIGENCE',
+  'WISDOM',
+  'CHARISMA',
   'POSITION',
   'ROOM',
   'ROOM_NAME',
@@ -719,6 +743,30 @@ function mapMsdpUpdate(variable: string, value: MudValue): Partial<MudState> {
       break
     case 'EXPERIENCE_TNL':
       partial.experienceTnl = toOptionalNumber(value)
+      break
+    case 'STR':
+    case 'STRENGTH':
+      partial.strength = toOptionalNumber(value)
+      break
+    case 'DEX':
+    case 'DEXTERITY':
+      partial.dexterity = toOptionalNumber(value)
+      break
+    case 'CON':
+    case 'CONSTITUTION':
+      partial.constitution = toOptionalNumber(value)
+      break
+    case 'INT':
+    case 'INTELLIGENCE':
+      partial.intelligence = toOptionalNumber(value)
+      break
+    case 'WIS':
+    case 'WISDOM':
+      partial.wisdom = toOptionalNumber(value)
+      break
+    case 'CHA':
+    case 'CHARISMA':
+      partial.charisma = toOptionalNumber(value)
       break
     case 'ATTACK_BONUS':
       partial.attackBonus = toOptionalNumber(value)

@@ -32,8 +32,8 @@ export const appSettings: AppSettings = {
     preview: 4173,
   },
   connection: {
-    defaultHost: 'LuminariMUD.com',
-    defaultPort: 4100,
+    defaultHost: 'krynn.d20mud.com',
+    defaultPort: 4300,
     muds: [
       {
         id: 'krynn',
@@ -67,8 +67,8 @@ export const appSettings: AppSettings = {
   },
   personalization: {
     browserTitle: 'd20MUD Web Clients',
-    eyebrow: 'd20MUD-Web-Client',
-    title: 'Custom Web Client for d20 based MUDs',
+    eyebrow: '',
+    title: 'd20MUD Web Clients',
     subtitle:
       '',
   },

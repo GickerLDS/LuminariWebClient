@@ -102,6 +102,7 @@ const NUMPAD_COMMANDS: Record<string, string> = {
 
 type BarConfig = {
   label: string
+  overlayLabel?: string
   value?: number
   max?: number
   accentClass: string
@@ -264,9 +265,17 @@ function App() {
       },
       {
         label: 'Opp',
+        overlayLabel: mudState.opponentName,
         value: mudState.opponentHealth,
         max: mudState.opponentHealthMax,
         accentClass: 'bar-opponent',
+      },
+      {
+        label: 'Tank',
+        overlayLabel: mudState.tankName,
+        value: mudState.tankHealth,
+        max: mudState.tankHealthMax,
+        accentClass: 'bar-tank',
       },
     ],
     [mudState],
@@ -278,6 +287,17 @@ function App() {
   const selectedMudPreset = useMemo(
     () => uiSettings.connection.muds.find((mud) => mud.id === selectedMudId),
     [selectedMudId, uiSettings.connection.muds],
+  )
+  const abilityScores = useMemo(
+    () => [
+      { label: 'STR', value: mudState.strength },
+      { label: 'DEX', value: mudState.dexterity },
+      { label: 'CON', value: mudState.constitution },
+      { label: 'INT', value: mudState.intelligence },
+      { label: 'WIS', value: mudState.wisdom },
+      { label: 'CHA', value: mudState.charisma },
+    ],
+    [mudState.charisma, mudState.constitution, mudState.dexterity, mudState.intelligence, mudState.strength, mudState.wisdom],
   )
 
   const sendMessage = useCallback((message: ClientMessage) => {
@@ -540,6 +560,7 @@ function App() {
               <StatusBar
                 key={bar.label}
                 label={bar.label}
+                overlayLabel={bar.overlayLabel}
                 value={bar.value}
                 max={bar.max}
                 accentClass={bar.accentClass}
@@ -578,12 +599,6 @@ function App() {
           </section>
 
           <section className="panel">
-            <div className="panel-header">
-              <div>
-                <h2>Character</h2>
-                <p>Values populated from MSDP stats and room state.</p>
-              </div>
-            </div>
 
             <div className="identity-block">
               <strong
@@ -602,10 +617,18 @@ function App() {
               />
             </div>
 
+            <div className="ability-grid" aria-label="Ability scores">
+              {abilityScores.map((score) => (
+                <div key={score.label} className="ability-cell">
+                  <span className="ability-label">{score.label}</span>
+                  <span className="ability-value">{formatNumber(score.value) ?? '—'}</span>
+                </div>
+              ))}
+            </div>
+
             <dl className="stats-grid">
               <Stat label="Position" value={mudState.position} />
               <Stat label="Attack" value={formatNumber(mudState.attackBonus)} />
-              <Stat label="Damage" value={formatNumber(mudState.damageBonus)} />
               <Stat label="Armor Class" value={formatNumber(mudState.armorClass)} />
               <Stat label="Alignment" value={mudState.alignment} />
               <Stat label="Money" value={formatNumber(mudState.money)} />
@@ -619,25 +642,28 @@ function App() {
 
 type StatusBarProps = {
   label: string
+  overlayLabel?: string
   value?: number
   max?: number
   accentClass: string
 }
 
-function StatusBar({ label, value, max, accentClass }: StatusBarProps) {
+function StatusBar({ label, overlayLabel, value, max, accentClass }: StatusBarProps) {
   const safeMax = max && max > 0 ? max : 0
   const percentage = safeMax > 0 && value !== undefined ? Math.min((value / safeMax) * 100, 100) : 0
   const counter =
     value !== undefined && max !== undefined
       ? `${formatNumber(value)} / ${formatNumber(max)}`
       : 'Waiting'
+  const trimmedOverlayLabel = overlayLabel?.trim()
+  const displayLabel = trimmedOverlayLabel ? `${label}: ${trimmedOverlayLabel}` : label
 
   return (
     <div className="status-bar">
       <div className="bar-track">
         <div className={`bar-fill ${accentClass}`} style={{ width: `${percentage}%` }} />
         <div className="bar-overlay">
-          <span className="bar-label">{label}</span>
+          <span className="bar-label">{displayLabel}</span>
           <span className="bar-counter">{counter}</span>
         </div>
       </div>
