@@ -83,6 +83,7 @@ const REPORTABLE_VARIABLES = [
   'AFFECTS',
   'ACTIONS',
   'GROUP',
+    'QUEST_INFO',
   'OPPONENT_NAME',
   'OPPONENT_HEALTH',
   'OPPONENT_HEALTH_MAX',
@@ -830,6 +831,9 @@ function mapMsdpUpdate(variable: string, value: MudValue): Partial<MudState> {
       break
     case 'GROUP':
       partial.group = value
+      break
+    case 'QUEST_INFO':
+      partial.questInfo = value
       break
     case 'OPPONENT_NAME':
       partial.opponentName = toOptionalString(value)

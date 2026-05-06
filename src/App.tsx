@@ -1,12 +1,14 @@
 import AnsiToHtml from 'ansi-to-html'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { ReactNode } from 'react'
 import { appSettings } from '../shared/app-settings.ts'
 import type { AppSettings } from '../shared/app-settings.ts'
 import type {
   ClientMessage,
   ConnectionStatus,
   MudState,
+  MudValue,
   ServerMessage,
 } from '../shared/mud.ts'
 import './App.css'
@@ -108,6 +110,20 @@ type BarConfig = {
   accentClass: string
 }
 
+type SidebarTabId = 'character' | 'quests' | 'group' | 'affects'
+
+type SidebarTab = {
+  id: SidebarTabId
+  label: string
+}
+
+const SIDEBAR_TABS: SidebarTab[] = [
+  { id: 'character', label: 'Character' },
+  { id: 'quests', label: 'Quests' },
+  { id: 'group', label: 'Group' },
+  { id: 'affects', label: 'Affects' },
+]
+
 function App() {
   const [uiSettings, setUiSettings] = useState<AppSettings>(appSettings)
   const [mudState, setMudState] = useState<MudState>({})
@@ -126,6 +142,8 @@ function App() {
   const [proxyReady, setProxyReady] = useState(false)
   const [status, setStatus] = useState<ConnectionStatus>('idle')
   const [statusDetail, setStatusDetail] = useState('Awaiting connection.')
+  const [isHeaderVisible, setIsHeaderVisible] = useState(true)
+  const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('character')
   const socketRef = useRef<WebSocket | null>(null)
   const terminalRef = useRef<HTMLDivElement | null>(null)
   const commandInputRef = useRef<HTMLInputElement | null>(null)
@@ -283,6 +301,11 @@ function App() {
 
   const canConnect = proxyReady && status !== 'connecting'
   const connected = status === 'connected'
+
+  useEffect(() => {
+    setIsHeaderVisible(!connected)
+  }, [connected])
+
   const mapOutput = useMemo(() => buildMapOutput(mudState), [mudState])
   const selectedMudPreset = useMemo(
     () => uiSettings.connection.muds.find((mud) => mud.id === selectedMudId),
@@ -490,55 +513,67 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">{uiSettings.personalization.eyebrow}</p>
-          <h1>{uiSettings.personalization.title}</h1>
-          <p className="subtitle">{uiSettings.personalization.subtitle}</p>
-        </div>
-
-        <form className="connection-form panel" onSubmit={handleConnectionSubmit}>
-          {uiSettings.connection.muds.length > 0 ? (
-            <label>
-              <span>MUD</span>
-              <select value={selectedMudId} onChange={(event) => handleMudPresetChange(event.target.value)}>
-                {uiSettings.connection.muds.map((mud) => (
-                  <option key={mud.id} value={mud.id}>
-                    {mud.name}
-                  </option>
-                ))}
-                <option value={CUSTOM_MUD_VALUE}>Custom</option>
-              </select>
-              {selectedMudPreset?.description ? (
-                <small className="connection-form-help">{selectedMudPreset.description}</small>
-              ) : null}
-            </label>
-          ) : null}
-
-          <label>
-            <span>Host</span>
-            <input value={host} onChange={(event) => handleHostChange(event.target.value)} />
-          </label>
-
-          <label>
-            <span>Port</span>
-            <input
-              inputMode="numeric"
-              value={port}
-              onChange={(event) => handlePortChange(Number(event.target.value) || DEFAULT_PORT)}
-            />
-          </label>
-
-          <button type="submit" disabled={!canConnect}>
-            {connected ? 'Disconnect' : status === 'connecting' ? 'Connecting…' : 'Connect'}
+      {connected ? (
+        <div className="header-toggle-row">
+          <button type="button" className="header-toggle" onClick={() => setIsHeaderVisible((current) => !current)}>
+            {isHeaderVisible ? 'Hide header' : 'Show header'}
           </button>
-        </form>
-      </header>
+        </div>
+      ) : null}
 
-      <section className="status-row">
-        <div className={`status-pill status-${status}`}>{status}</div>
-        <p>{statusDetail}</p>
-      </section>
+      {isHeaderVisible ? (
+        <div className="app-header">
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">{uiSettings.personalization.eyebrow}</p>
+              <h1>{uiSettings.personalization.title}</h1>
+              <p className="subtitle">{uiSettings.personalization.subtitle}</p>
+            </div>
+
+            <form className="connection-form panel" onSubmit={handleConnectionSubmit}>
+              {uiSettings.connection.muds.length > 0 ? (
+                <label>
+                  <span>MUD</span>
+                  <select value={selectedMudId} onChange={(event) => handleMudPresetChange(event.target.value)}>
+                    {uiSettings.connection.muds.map((mud) => (
+                      <option key={mud.id} value={mud.id}>
+                        {mud.name}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_MUD_VALUE}>Custom</option>
+                  </select>
+                  {selectedMudPreset?.description ? (
+                    <small className="connection-form-help">{selectedMudPreset.description}</small>
+                  ) : null}
+                </label>
+              ) : null}
+
+              <label>
+                <span>Host</span>
+                <input value={host} onChange={(event) => handleHostChange(event.target.value)} />
+              </label>
+
+              <label>
+                <span>Port</span>
+                <input
+                  inputMode="numeric"
+                  value={port}
+                  onChange={(event) => handlePortChange(Number(event.target.value) || DEFAULT_PORT)}
+                />
+              </label>
+
+              <button type="submit" disabled={!canConnect}>
+                {connected ? 'Disconnect' : status === 'connecting' ? 'Connecting…' : 'Connect'}
+              </button>
+            </form>
+          </header>
+
+          <section className="status-row">
+            <div className={`status-pill status-${status}`}>{status}</div>
+            <p>{statusDetail}</p>
+          </section>
+        </div>
+      ) : null}
 
       <main className="layout">
         <section className="terminal-column panel">
@@ -598,41 +633,81 @@ function App() {
             <pre className="minimap" dangerouslySetInnerHTML={{ __html: renderMudHtml(mapOutput) }} />
           </section>
 
-          <section className="panel">
-
-            <div className="identity-block">
-              <strong
-                dangerouslySetInnerHTML={{
-                  __html: renderMudHtml(mudState.characterName ?? 'Unknown adventurer'),
-                }}
-              />
-              <span
-                dangerouslySetInnerHTML={{
-                  __html: renderMudHtml(
-                    [mudState.level ? `Level ${mudState.level}` : undefined, mudState.race, mudState.className]
-                      .filter(Boolean)
-                      .join(' · ') || 'Awaiting MSDP profile',
-                  ),
-                }}
-              />
-            </div>
-
-            <div className="ability-grid" aria-label="Ability scores">
-              {abilityScores.map((score) => (
-                <div key={score.label} className="ability-cell">
-                  <span className="ability-label">{score.label}</span>
-                  <span className="ability-value">{formatNumber(score.value) ?? '—'}</span>
-                </div>
+          <section className="panel tabbed-panel">
+            <div className="tab-strip" role="tablist" aria-label="Sidebar sections">
+              {SIDEBAR_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSidebarTab === tab.id}
+                  className={`tab-button${activeSidebarTab === tab.id ? ' tab-button-active' : ''}`}
+                  onClick={() => setActiveSidebarTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
               ))}
             </div>
 
-            <dl className="stats-grid">
-              <Stat label="Position" value={mudState.position} />
-              <Stat label="Attack" value={formatNumber(mudState.attackBonus)} />
-              <Stat label="Armor Class" value={formatNumber(mudState.armorClass)} />
-              <Stat label="Alignment" value={mudState.alignment} />
-              <Stat label="Money" value={formatNumber(mudState.money)} />
-            </dl>
+            <div className="tab-panel" role="tabpanel">
+              {activeSidebarTab === 'character' ? (
+                <>
+                  <div className="identity-block">
+                    <strong
+                      dangerouslySetInnerHTML={{
+                        __html: renderMudHtml(mudState.characterName ?? 'Unknown adventurer'),
+                      }}
+                    />
+                    <span
+                      dangerouslySetInnerHTML={{
+                        __html: renderMudHtml(
+                          [mudState.level ? `Level ${mudState.level}` : undefined, mudState.race, mudState.className]
+                            .filter(Boolean)
+                            .join(' · ') || 'Awaiting MSDP profile',
+                        ),
+                      }}
+                    />
+                  </div>
+
+                  <div className="ability-grid" aria-label="Ability scores">
+                    {abilityScores.map((score) => (
+                      <div key={score.label} className="ability-cell">
+                        <span className="ability-label">{score.label}</span>
+                        <span className="ability-value">{formatNumber(score.value) ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <dl className="stats-grid">
+                    <Stat label="Position" value={mudState.position} />
+                    <Stat label="Attack" value={formatNumber(mudState.attackBonus)} />
+                    <Stat label="Armor Class" value={formatNumber(mudState.armorClass)} />
+                    <Stat label="Alignment" value={mudState.alignment} />
+                    <Stat label="Money" value={formatNumber(mudState.money)} />
+                  </dl>
+                </>
+              ) : null}
+
+              {activeSidebarTab === 'quests' ? (
+                mudState.questInfo ? (
+                  <QuestInfoPanel value={mudState.questInfo} />
+                ) : (
+                  <EmptyTabMessage message="No quest data reported yet." />
+                )
+              ) : null}
+
+              {activeSidebarTab === 'group' ? (
+                mudState.group ? (
+                  <GroupPanel value={mudState.group} />
+                ) : (
+                  <EmptyTabMessage message="No group data reported yet." />
+                )
+              ) : null}
+
+              {activeSidebarTab === 'affects' ? (
+                <MudValuePanel value={mudState.affects} emptyMessage="No affects reported yet." />
+              ) : null}
+            </div>
           </section>
         </aside>
       </main>
@@ -676,6 +751,11 @@ type StatProps = {
   value?: string | number
 }
 
+type MudValuePanelProps = {
+  value?: MudValue
+  emptyMessage: string
+}
+
 function Stat({ label, value }: StatProps) {
   if (typeof value === 'string') {
     return (
@@ -692,6 +772,313 @@ function Stat({ label, value }: StatProps) {
       <dd>{value !== undefined ? value : '—'}</dd>
     </>
   )
+}
+
+function EmptyTabMessage({ message }: { message: string }) {
+  return <p className="tab-empty-message">{message}</p>
+}
+
+type GroupPanelProps = {
+  value: MudValue
+}
+
+type GroupMember = {
+  name?: string
+  isLeader: boolean
+  health?: string
+  healthMax?: string
+  move?: string
+  moveMax?: string
+}
+
+function GroupPanel({ value }: GroupPanelProps) {
+  const members = parseGroupMembers(value)
+
+  if (members.length === 0) {
+    return <MudValuePanel value={value} emptyMessage="No group data reported yet." />
+  }
+
+  return (
+    <div className="tab-inline-output">
+      {members.map((member, index) => {
+        const healthText =
+          member.health !== undefined && member.healthMax !== undefined
+            ? `Health ${member.health}/${member.healthMax}`
+            : null
+        const moveText =
+          member.move !== undefined && member.moveMax !== undefined
+            ? `Move ${member.move}/${member.moveMax}`
+            : null
+
+        return (
+          <div key={`${member.name ?? 'member'}-${index}`} className="group-member">
+            <div>
+              {member.name ?? 'Unknown'}
+              {member.isLeader ? ' (Leader)' : ''}
+            </div>
+            {healthText || moveText ? (
+              <div>
+                {[healthText, moveText].filter(Boolean).join(' ')}
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+type QuestInfoPanelProps = {
+  value: MudValue
+}
+
+function QuestInfoPanel({ value }: QuestInfoPanelProps) {
+  const normalizedValue = normalizeQuestValue(value)
+  return <div className="tab-inline-output quest-html-output">{renderQuestNode(normalizedValue)}</div>
+}
+
+function MudValuePanel({ value, emptyMessage }: MudValuePanelProps) {
+  if (value === undefined || value === null) {
+    return <EmptyTabMessage message={emptyMessage} />
+  }
+
+  const text = formatMudValueAsText(value)
+  return <div className="tab-inline-output">{text || emptyMessage}</div>
+}
+
+function formatMudValueAsText(value: MudValue): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    return formatNumber(value) ?? String(value)
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No'
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => formatMudValueAsText(item)).filter(Boolean).join(', ')
+  }
+
+  const entries = Object.entries(value)
+    .map(([key, val]) => {
+      const formattedValue = formatMudValueAsText(val)
+      return formattedValue ? `${formatMudLabel(key)}: ${formattedValue}` : null
+    })
+    .filter(Boolean)
+
+  return entries.join(' | ')
+}
+
+function parseGroupMembers(value: MudValue): GroupMember[] {
+  const entries = asCollection(value)
+
+  return entries
+    .flatMap((entry) => {
+      if (!isMudRecord(entry)) {
+        return []
+      }
+
+      const name = asOptionalText(
+        readAnyKey(entry, ['name', 'NAME', 'member_name', 'MEMBER_NAME', 'character_name', 'CHARACTER_NAME']),
+      )
+      const health = asOptionalText(readAnyKey(entry, ['health', 'HEALTH']))
+      const healthMax = asOptionalText(readAnyKey(entry, ['health_max', 'HEALTH_MAX', 'max_health', 'MAX_HEALTH']))
+      const move = asOptionalText(readAnyKey(entry, ['move', 'MOVE', 'movement', 'MOVEMENT']))
+      const moveMax = asOptionalText(readAnyKey(entry, ['move_max', 'MOVE_MAX', 'movement_max', 'MOVEMENT_MAX']))
+      const isLeader = asOptionalBoolean(readAnyKey(entry, ['is_leader', 'IS_LEADER', 'leader', 'LEADER'])) ?? false
+
+      if (!name && !health && !healthMax && !move && !moveMax) {
+        return []
+      }
+
+      return [{ name, isLeader, health, healthMax, move, moveMax }]
+    })
+}
+
+function renderQuestNode(value: MudValue): ReactNode {
+  if (value === null || value === undefined) {
+    return <span className="quest-empty">No quest data reported yet.</span>
+  }
+
+  if (typeof value === 'string') {
+    return <span dangerouslySetInnerHTML={{ __html: renderMudHtml(value) }} />
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return <span>{formatMudValueAsText(value)}</span>
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span className="quest-empty">No entries.</span>
+    }
+
+    return (
+      <ul className="quest-list">
+        {value.map((item, index) => (
+          <li key={index}>{renderQuestNode(item)}</li>
+        ))}
+      </ul>
+    )
+  }
+
+  const entries = Object.entries(value)
+  if (entries.length === 0) {
+    return <span className="quest-empty">No fields.</span>
+  }
+
+  return (
+    <div className="quest-object">
+      {entries.map(([key, entryValue]) => {
+        const label = formatMudLabel(key)
+        const isScalar =
+          entryValue === null ||
+          entryValue === undefined ||
+          typeof entryValue === 'string' ||
+          typeof entryValue === 'number' ||
+          typeof entryValue === 'boolean'
+
+        if (isScalar) {
+          return (
+            <div key={key} className="quest-row">
+              <span className="quest-key">{label}</span>
+              <span className="quest-value">{renderQuestNode(entryValue)}</span>
+            </div>
+          )
+        }
+
+        return (
+          <div key={key} className="quest-block">
+            <div className="quest-block-title">{label}</div>
+            <div>{renderQuestNode(entryValue)}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function normalizeQuestValue(value: MudValue): MudValue {
+  if (typeof value !== 'string') {
+    return value
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return value
+  }
+
+  const looksLikeJson =
+    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+    (trimmed.startsWith('[') && trimmed.endsWith(']'))
+
+  if (!looksLikeJson) {
+    return value
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (isMudValue(parsed)) {
+      return parsed
+    }
+  } catch {
+    return value
+  }
+
+  return value
+}
+
+function isMudValue(value: unknown): value is MudValue {
+  if (value === null) {
+    return true
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return true
+  }
+
+  if (Array.isArray(value)) {
+    return value.every((item) => isMudValue(item))
+  }
+
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).every((entry) => isMudValue(entry))
+  }
+
+  return false
+}
+
+function asCollection(value: MudValue): MudValue[] {
+  if (Array.isArray(value)) {
+    return value
+  }
+
+  if (isMudRecord(value)) {
+    return Object.values(value)
+  }
+
+  return []
+}
+
+function isMudRecord(value: MudValue): value is Record<string, MudValue> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readAnyKey(record: Record<string, MudValue>, keys: string[]): MudValue | undefined {
+  for (const key of keys) {
+    if (key in record) {
+      return record[key]
+    }
+  }
+
+  return undefined
+}
+
+function asOptionalText(value: MudValue | undefined): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+
+  const formatted = formatMudValueAsText(value)
+  return formatted || undefined
+}
+
+function asOptionalBoolean(value: MudValue | undefined): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    return value !== 0
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'y') {
+      return true
+    }
+    if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'n') {
+      return false
+    }
+  }
+
+  return undefined
+}
+
+function formatMudLabel(value: string) {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
 function getWebSocketUrl() {

@@ -56,6 +56,7 @@ export interface MudState {
   actions?: MudValue
   affects?: MudValue
   group?: MudValue
+    questInfo?: MudValue
   opponentName?: string
   opponentHealth?: number
   opponentHealthMax?: number

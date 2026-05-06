@@ -5,9 +5,16 @@ LuminariWebClient is a web-based MUD client for **LuminariMUD-compatible** games
 ## Features
 
 - Browser terminal with ANSI-colored game output
-- Compact HUD with HP, PSP, movement, EXP, and opponent bars
+- Compact responsive layout optimized for smaller screens
+- Auto-collapsing header after connect, with a small show/hide toggle
+- Compact HUD with HP, PSP, movement, EXP, opponent, and tank bars
+- Tank and opponent gauges with overlaid names
 - MSDP-driven **MINIMAP** display
-- Character info panel fed by MSDP values
+- Character tab with MSDP-fed profile and ability score grid (STR/DEX/CON/INT/WIS/CHA)
+- Sidebar tabs for Character, Quests, Group, and Affects
+- Group tab formatting with per-member spacing, leader marker, and compact stat line (`Health x/y Move a/b`)
+- Quest tab HTML rendering for structured quest payloads (including JSON array/object data)
+- Affects tab rendering for nested MSDP data
 - Numpad movement support
 - Command history with ArrowUp / ArrowDown
 - Movement commands excluded from command history
@@ -200,11 +207,12 @@ If presets are defined, the web client shows a dropdown beside the host, port, a
 
 The client currently uses MSDP for these categories:
 
-- **Character:** `CHARACTER_NAME`, `LEVEL`, `CLASS`, `RACE`
+- **Character:** `CHARACTER_NAME`, `LEVEL`, `CLASS`, `RACE`, `POSITION`, `ALIGNMENT`, `MONEY`, `AC`, `ATTACK_BONUS`
+- **Ability scores:** `STR`, `DEX`, `CON`, `INT`, `WIS`, `CHA`, `STRENGTH`, `DEXTERITY`, `CONSTITUTION`, `INTELLIGENCE`, `WISDOM`, `CHARISMA`
 - **Bars:** `HEALTH`, `HEALTH_MAX`, `PSP`, `PSP_MAX`, `MOVEMENT`, `MOVEMENT_MAX`, `EXPERIENCE`, `EXPERIENCE_MAX`, `EXPERIENCE_TNL`
-- **Combat:** `OPPONENT_NAME`, `OPPONENT_HEALTH`, `OPPONENT_HEALTH_MAX`
+- **Combat:** `OPPONENT_NAME`, `OPPONENT_HEALTH`, `OPPONENT_HEALTH_MAX`, `TANK_NAME`, `TANK_HEALTH`, `TANK_HEALTH_MAX`
 - **Room and map:** `ROOM`, `ROOM_NAME`, `AREA_NAME`, `ROOM_VNUM`, `ROOM_EXITS`, `MINIMAP`
-- **Misc:** `ATTACK_BONUS`, `DAMAGE_BONUS`, `AC`, `ALIGNMENT`, `MONEY`, `POSITION`
+- **Group and status collections:** `GROUP`, `AFFECTS`, `ACTIONS`, `QUEST_INFO`
 
 Server-level fields such as `SERVER_ID` are also requested so the bridge can validate the connection before character login completes.
 
