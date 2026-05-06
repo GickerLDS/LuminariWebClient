@@ -13,10 +13,17 @@ LuminariWebClient is a web-based MUD client for **LuminariMUD-compatible** games
 - Character tab with MSDP-fed profile and ability score grid (STR/DEX/CON/INT/WIS/CHA)
 - Sidebar tabs for Character, Quests, Group, and Affects
 - Group tab formatting with per-member spacing, leader marker, and compact stat line (`Health x/y Move a/b`)
-- Quest tab HTML rendering for structured quest payloads (including JSON array/object data)
+- Quest tab HTML rendering for structured quest payloads (including JSON string/array/object data)
+  - Displays quest name, type, vnum (no commas), progress as `completed/required`, and targets as comma-separated names
+  - Hides `slot`, `time_remaining`, target IDs, and field labels
 - Affects tab rendering for nested MSDP data
+- Character title display with smart name/title composition:
+  - If `TITLE` contains the character name, shows the title only
+  - If `TITLE` is set but does not contain the character name, shows `Name Title`
+  - If `TITLE` is not set, shows the character name alone
 - Numpad movement support
 - Command history with ArrowUp / ArrowDown
+- Tab completion: pressing Tab autocompletes from the most recent matching command in history
 - Movement commands excluded from command history
 - Click-anywhere focus behavior for the command input
 - MUD preset dropdown plus manual host/port entry
@@ -207,7 +214,7 @@ If presets are defined, the web client shows a dropdown beside the host, port, a
 
 The client currently uses MSDP for these categories:
 
-- **Character:** `CHARACTER_NAME`, `LEVEL`, `CLASS`, `RACE`, `POSITION`, `ALIGNMENT`, `MONEY`, `AC`, `ATTACK_BONUS`
+- **Character:** `CHARACTER_NAME`, `TITLE`, `LEVEL`, `CLASS`, `RACE`, `POSITION`, `ALIGNMENT`, `MONEY`, `AC`, `ATTACK_BONUS`
 - **Ability scores:** `STR`, `DEX`, `CON`, `INT`, `WIS`, `CHA`, `STRENGTH`, `DEXTERITY`, `CONSTITUTION`, `INTELLIGENCE`, `WISDOM`, `CHARISMA`
 - **Bars:** `HEALTH`, `HEALTH_MAX`, `PSP`, `PSP_MAX`, `MOVEMENT`, `MOVEMENT_MAX`, `EXPERIENCE`, `EXPERIENCE_MAX`, `EXPERIENCE_TNL`
 - **Combat:** `OPPONENT_NAME`, `OPPONENT_HEALTH`, `OPPONENT_HEALTH_MAX`, `TANK_NAME`, `TANK_HEALTH`, `TANK_HEALTH_MAX`

@@ -10,6 +10,7 @@ export type MudValue =
 
 export interface MudState {
   characterName?: string
+  title?: string
   serverId?: string
   serverTime?: number
   snippetVersion?: number

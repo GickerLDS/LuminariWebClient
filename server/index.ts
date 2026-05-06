@@ -38,6 +38,7 @@ const DEFAULT_COLUMNS = 120
 const DEFAULT_ROWS = 40
 const REPORTABLE_VARIABLES = [
   'CHARACTER_NAME',
+  'TITLE',
   'SERVER_ID',
   'SERVER_TIME',
   'SNIPPET_VERSION',
@@ -92,6 +93,8 @@ const REPORTABLE_VARIABLES = [
   'TANK_HEALTH_MAX',
 ]
 const REFRESHABLE_VARIABLES = [
+  'CHARACTER_NAME',
+  'TITLE',
   'HEALTH',
   'HEALTH_MAX',
   'PSP',
@@ -708,6 +711,9 @@ function mapMsdpUpdate(variable: string, value: MudValue): Partial<MudState> {
       break
     case 'CHARACTER_NAME':
       partial.characterName = toOptionalString(value)
+      break
+    case 'TITLE':
+      partial.title = toOptionalString(value)
       break
     case 'LEVEL':
       partial.level = toOptionalNumber(value)

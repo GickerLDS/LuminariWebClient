@@ -322,6 +322,10 @@ function App() {
     ],
     [mudState.charisma, mudState.constitution, mudState.dexterity, mudState.intelligence, mudState.strength, mudState.wisdom],
   )
+  const characterHeading = useMemo(
+    () => formatCharacterHeading(mudState.characterName, mudState.title),
+    [mudState.characterName, mudState.title],
+  )
 
   const sendMessage = useCallback((message: ClientMessage) => {
     const socket = socketRef.current
@@ -470,6 +474,27 @@ function App() {
 
   function handleCommandKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
     if (event.altKey || event.ctrlKey || event.metaKey) {
+      return
+    }
+
+    if (event.key === 'Tab') {
+      const prefix = command.trim().toLowerCase()
+      if (!prefix) {
+        return
+      }
+
+      const matchingCommands = commandHistory.filter((entry) =>
+        entry.trim().toLowerCase().startsWith(prefix),
+      )
+      if (matchingCommands.length === 0) {
+        return
+      }
+
+      event.preventDefault()
+      const completedCommand = matchingCommands[matchingCommands.length - 1]
+      setCommand(completedCommand)
+      setHistoryIndex(null)
+      setHistoryDraft(completedCommand)
       return
     }
 
@@ -655,7 +680,7 @@ function App() {
                   <div className="identity-block">
                     <strong
                       dangerouslySetInnerHTML={{
-                        __html: renderMudHtml(mudState.characterName ?? 'Unknown adventurer'),
+                        __html: renderMudHtml(characterHeading),
                       }}
                     />
                     <span
@@ -713,6 +738,28 @@ function App() {
       </main>
     </div>
   )
+}
+
+function formatCharacterHeading(characterName?: string, title?: string) {
+  const trimmedName = characterName?.trim()
+  const trimmedTitle = title?.trim()
+
+  if (!trimmedTitle) {
+    return trimmedName || 'Unknown adventurer'
+  }
+
+  if (!trimmedName) {
+    return trimmedTitle
+  }
+
+  const normalizedName = trimmedName.toLowerCase()
+  const normalizedTitle = trimmedTitle.toLowerCase()
+
+  if (normalizedTitle.includes(normalizedName)) {
+    return trimmedTitle
+  }
+
+  return `${trimmedName} ${trimmedTitle}`
 }
 
 type StatusBarProps = {
@@ -908,6 +955,29 @@ function renderQuestNode(value: MudValue): ReactNode {
     return <span className="quest-empty">No quest data reported yet.</span>
   }
 
+  const compactQuests = parseQuestEntries(value)
+  if (compactQuests.length > 0) {
+    return (
+      <div className="quest-compact-list">
+        {compactQuests.map((quest, index) => (
+          <div className="quest-compact-item" key={`${quest.name ?? 'quest'}-${index}`}>
+            {quest.name ? (
+              <div dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.name) }} />
+            ) : null}
+            {quest.type ? (
+              <div dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.type) }} />
+            ) : null}
+            {quest.vnum ? <div>{quest.vnum}</div> : null}
+            {quest.progress ? <div>{quest.progress}</div> : null}
+            {quest.targets ? (
+              <div dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.targets) }} />
+            ) : null}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   if (typeof value === 'string') {
     return <span dangerouslySetInnerHTML={{ __html: renderMudHtml(value) }} />
   }
@@ -964,6 +1034,88 @@ function renderQuestNode(value: MudValue): ReactNode {
       })}
     </div>
   )
+}
+
+type QuestEntry = {
+  name?: string
+  type?: string
+  vnum?: string
+  progress?: string
+  targets?: string
+}
+
+function parseQuestEntries(value: MudValue): QuestEntry[] {
+  const source = Array.isArray(value) ? value : isMudRecord(value) ? [value] : []
+
+  return source.flatMap((entry) => {
+    if (!isMudRecord(entry)) {
+      return []
+    }
+
+    const name = asOptionalText(readAnyKey(entry, ['name', 'NAME']))
+    const type = asOptionalText(readAnyKey(entry, ['type', 'TYPE']))
+
+    const rawVnum = readAnyKey(entry, ['vnum', 'VNUM'])
+    const vnum =
+      rawVnum === undefined || rawVnum === null
+        ? undefined
+        : typeof rawVnum === 'number'
+          ? String(Math.trunc(rawVnum))
+          : String(rawVnum).replace(/,/g, '')
+
+    const progress = formatQuestProgress(readAnyKey(entry, ['progress', 'PROGRESS']))
+    const targets = formatQuestTargets(readAnyKey(entry, ['targets', 'TARGETS']))
+
+    if (!name && !type && !vnum && !progress && !targets) {
+      return []
+    }
+
+    return [
+      {
+        name,
+        type,
+        vnum,
+        progress,
+        targets,
+      },
+    ]
+  })
+}
+
+function formatQuestProgress(value: MudValue | undefined): string | undefined {
+  if (!isMudRecord(value)) {
+    return undefined
+  }
+
+  const completed = asOptionalText(readAnyKey(value, ['completed', 'COMPLETED']))
+  const required = asOptionalText(readAnyKey(value, ['required', 'REQUIRED']))
+  if (!completed || !required) {
+    return undefined
+  }
+
+  return `${completed}/${required}`
+}
+
+function formatQuestTargets(value: MudValue | undefined): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  const names = value
+    .map((target) => {
+      if (isMudRecord(target)) {
+        return asOptionalText(readAnyKey(target, ['name', 'NAME']))
+      }
+
+      return asOptionalText(target)
+    })
+    .filter((entry): entry is string => Boolean(entry))
+
+  if (names.length === 0) {
+    return undefined
+  }
+
+  return names.join(', ')
 }
 
 function normalizeQuestValue(value: MudValue): MudValue {
@@ -1028,7 +1180,7 @@ function asCollection(value: MudValue): MudValue[] {
   return []
 }
 
-function isMudRecord(value: MudValue): value is Record<string, MudValue> {
+function isMudRecord(value: unknown): value is Record<string, MudValue> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 

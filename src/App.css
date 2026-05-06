@@ -346,6 +346,15 @@
   color: var(--muted);
 }
 
+.quest-compact-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.quest-compact-item + .quest-compact-item {
+  margin-top: 0.85rem;
+}
+
 .identity-block,
 .room-heading {
   display: flex;
