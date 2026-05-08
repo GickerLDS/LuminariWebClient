@@ -1,12 +1,18 @@
 import AnsiToHtml from 'ansi-to-html'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { CSSProperties, ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import type { ReactNode } from 'react'
 import { appSettings } from '../shared/app-settings.ts'
 import type { AppSettings } from '../shared/app-settings.ts'
+import {
+  defaultMsdpVariables,
+  normalizeMsdpVariableMap,
+} from '../shared/mud.ts'
 import type {
   ClientMessage,
   ConnectionStatus,
+  MsdpVariableKey,
+  MsdpVariableMap,
   MudState,
   MudValue,
   ServerMessage,
@@ -18,6 +24,14 @@ const DEFAULT_PORT = appSettings.connection.defaultPort
 const CUSTOM_MUD_VALUE = '__custom__'
 const TERMINAL_CHUNK_LIMIT = 500
 const COMMAND_HISTORY_LIMIT = 100
+const AUTOMATION_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+const AUTOMATION_COOKIE_CHUNK_SIZE = 3000
+const AUTOMATION_RECURSION_LIMIT = 10
+const CLIENT_CONFIG_EXPORT_VERSION = 1
+const ALIASES_COOKIE_NAME = 'lwc.aliases'
+const TRIGGERS_COOKIE_NAME = 'lwc.triggers'
+const CLIENT_SETTINGS_COOKIE_NAME = 'lwc.settings'
+const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, 'g')
 const LUMINARI_COLOR_CHAR = '^'
 const LUMINARI_COLOR_CODES: Record<string, string> = {
   n: '\u001b[0;00m',
@@ -117,6 +131,150 @@ type SidebarTab = {
   label: string
 }
 
+type AliasDefinition = {
+  id: string
+  pattern: string
+  expansion: string
+  enabled: boolean
+}
+
+type TriggerDefinition = {
+  id: string
+  pattern: string
+  action: string
+  enabled: boolean
+}
+
+type SidebarFontFamily = 'sans' | 'mono' | 'serif'
+
+type ClientSettings = {
+  terminal: {
+    fontSize: number
+    lineHeight: number
+    autoScroll: boolean
+    wrapLines: boolean
+  }
+  minimap: {
+    fontSize: number
+    paneHeight: number
+  }
+  sidebar: {
+    fontFamily: SidebarFontFamily
+    fontSize: number
+  }
+  msdp: MsdpVariableMap
+}
+
+type AutomationNotice = {
+  kind: 'success' | 'error'
+  text: string
+}
+
+type AutomationMenuId = 'aliases' | 'triggers' | 'msdpVars' | 'settings'
+
+const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
+  terminal: {
+    fontSize: 14,
+    lineHeight: 1.55,
+    autoScroll: true,
+    wrapLines: true,
+  },
+  minimap: {
+    fontSize: 14,
+    paneHeight: 16,
+  },
+  sidebar: {
+    fontFamily: 'mono',
+    fontSize: 13,
+  },
+  msdp: normalizeMsdpVariableMap(defaultMsdpVariables),
+}
+
+const OUTPUT_FONT_SIZE_OPTIONS = [12, 13, 14, 15, 16, 18, 20, 22, 24]
+const OUTPUT_LINE_HEIGHT_OPTIONS = [
+  { value: 1.35, label: 'Compact' },
+  { value: 1.55, label: 'Normal' },
+  { value: 1.75, label: 'Relaxed' },
+]
+const SIDEBAR_FONT_OPTIONS: Array<{ value: SidebarFontFamily; label: string }> = [
+  { value: 'sans', label: 'Sans serif' },
+  { value: 'mono', label: 'Monospace' },
+  { value: 'serif', label: 'Serif' },
+]
+const SIDEBAR_FONT_FAMILIES: Record<SidebarFontFamily, string> = {
+  sans: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  mono: 'var(--mono)',
+  serif: 'ui-serif, Georgia, Cambria, "Times New Roman", serif',
+}
+const MSDP_VARIABLE_GROUPS: Array<{
+  title: string
+  description: string
+  fields: Array<{ key: MsdpVariableKey; label: string }>
+}> = [
+  {
+    title: 'Character',
+    description: 'Profile and core stat variables used in the character panel.',
+    fields: [
+      { key: 'characterName', label: 'Character name' },
+      { key: 'title', label: 'Title' },
+      { key: 'level', label: 'Level' },
+      { key: 'race', label: 'Race' },
+      { key: 'className', label: 'Class' },
+      { key: 'position', label: 'Position' },
+      { key: 'alignment', label: 'Alignment' },
+      { key: 'money', label: 'Money' },
+    ],
+  },
+  {
+    title: 'Status and attributes',
+    description: 'Values that drive the bars and ability score sections.',
+    fields: [
+      { key: 'health', label: 'Health' },
+      { key: 'healthMax', label: 'Health max' },
+      { key: 'psp', label: 'PSP' },
+      { key: 'pspMax', label: 'PSP max' },
+      { key: 'movement', label: 'Movement' },
+      { key: 'movementMax', label: 'Movement max' },
+      { key: 'experience', label: 'Experience' },
+      { key: 'experienceMax', label: 'Experience max' },
+      { key: 'experienceTnl', label: 'Experience to next level' },
+      { key: 'strength', label: 'Strength' },
+      { key: 'dexterity', label: 'Dexterity' },
+      { key: 'constitution', label: 'Constitution' },
+      { key: 'intelligence', label: 'Intelligence' },
+      { key: 'wisdom', label: 'Wisdom' },
+      { key: 'charisma', label: 'Charisma' },
+      { key: 'fortitude', label: 'Fortitude' },
+      { key: 'reflex', label: 'Reflex' },
+      { key: 'willpower', label: 'Willpower' },
+      { key: 'attackBonus', label: 'Attack bonus' },
+      { key: 'armorClass', label: 'Armor class' },
+    ],
+  },
+  {
+    title: 'Panels and map',
+    description: 'Variables that populate the minimap, quest, group, and affects panels.',
+    fields: [
+      { key: 'minimap', label: 'Minimap' },
+      { key: 'affects', label: 'Affects' },
+      { key: 'group', label: 'Group' },
+      { key: 'questInfo', label: 'Quest info' },
+    ],
+  },
+  {
+    title: 'Combat targets',
+    description: 'Opponent and tank data shown in the status bars.',
+    fields: [
+      { key: 'opponentName', label: 'Opponent name' },
+      { key: 'opponentHealth', label: 'Opponent health' },
+      { key: 'opponentHealthMax', label: 'Opponent health max' },
+      { key: 'tankName', label: 'Tank name' },
+      { key: 'tankHealth', label: 'Tank health' },
+      { key: 'tankHealthMax', label: 'Tank health max' },
+    ],
+  },
+]
+
 const SIDEBAR_TABS: SidebarTab[] = [
   { id: 'character', label: 'Character' },
   { id: 'quests', label: 'Quests' },
@@ -136,6 +294,10 @@ function App() {
   const [commandHistory, setCommandHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const [historyDraft, setHistoryDraft] = useState('')
+  const [aliases, setAliases] = useState<AliasDefinition[]>(() => loadAliasesFromCookies())
+  const [triggers, setTriggers] = useState<TriggerDefinition[]>(() => loadTriggersFromCookies())
+  const [clientSettings, setClientSettings] = useState<ClientSettings>(() => loadClientSettingsFromCookies())
+  const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null)
   const [terminalChunks, setTerminalChunks] = useState<string[]>([
     '<span class="terminal-muted">Connect to a LuminariMUD-compatible server to begin.</span>',
   ])
@@ -143,15 +305,67 @@ function App() {
   const [status, setStatus] = useState<ConnectionStatus>('idle')
   const [statusDetail, setStatusDetail] = useState('Awaiting connection.')
   const [isHeaderVisible, setIsHeaderVisible] = useState(true)
+  const [openAutomationMenu, setOpenAutomationMenu] = useState<AutomationMenuId | null>(null)
   const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('character')
   const socketRef = useRef<WebSocket | null>(null)
   const terminalRef = useRef<HTMLDivElement | null>(null)
   const commandInputRef = useRef<HTMLInputElement | null>(null)
+  const configFileInputRef = useRef<HTMLInputElement | null>(null)
+  const menuBarRef = useRef<HTMLDivElement | null>(null)
   const ansiConverterRef = useRef(createAnsiConverter())
+  const triggerBufferRef = useRef('')
+  const statusRef = useRef<ConnectionStatus>('idle')
+  const aliasesRef = useRef<AliasDefinition[]>(aliases)
+  const triggersRef = useRef<TriggerDefinition[]>(triggers)
 
   useEffect(() => {
     document.title = uiSettings.personalization.browserTitle
   }, [uiSettings.personalization.browserTitle])
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  useEffect(() => {
+    aliasesRef.current = aliases
+    saveAliasesToCookies(aliases)
+  }, [aliases])
+
+  useEffect(() => {
+    triggersRef.current = triggers
+    saveTriggersToCookies(triggers)
+  }, [triggers])
+
+  useEffect(() => {
+    saveClientSettingsToCookies(normalizeClientSettings(clientSettings))
+  }, [clientSettings])
+
+  useEffect(() => {
+    if (!openAutomationMenu) {
+      return
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.target instanceof Node && menuBarRef.current?.contains(event.target)) {
+        return
+      }
+
+      setOpenAutomationMenu(null)
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setOpenAutomationMenu(null)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openAutomationMenu])
 
   useEffect(() => {
     let active = true
@@ -190,6 +404,58 @@ function App() {
     }
   }, [])
 
+  const sendMessage = useCallback((message: ClientMessage) => {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      statusRef.current = 'error'
+      setStatus('error')
+      setStatusDetail('The local WebSocket proxy is unavailable.')
+      setIsHeaderVisible(true)
+      return
+    }
+
+    socket.send(JSON.stringify(message))
+  }, [])
+
+  const sendInputLine = useCallback(
+    (text: string) => {
+      if (statusRef.current !== 'connected') {
+        return
+      }
+
+      sendMessage({ type: 'input', text })
+    },
+    [sendMessage],
+  )
+
+  const rememberCommand = useCallback((text: string) => {
+    const normalized = text.trim().toLowerCase()
+    if (!normalized || MOVEMENT_COMMANDS.has(normalized)) {
+      return
+    }
+
+    setCommandHistory((current) => [...current, text].slice(-COMMAND_HISTORY_LIMIT))
+  }, [])
+
+  const dispatchInputText = useCallback(
+    (text: string, options?: { rememberInHistory?: boolean }) => {
+      const trimmed = text.trim()
+      if (!trimmed) {
+        return
+      }
+
+      if (options?.rememberInHistory ?? true) {
+        rememberCommand(trimmed)
+      }
+
+      const expandedCommands = expandAliasCommands(trimmed, aliasesRef.current)
+      for (const expandedCommand of expandedCommands) {
+        sendInputLine(expandedCommand)
+      }
+    },
+    [rememberCommand, sendInputLine],
+  )
+
   useEffect(() => {
     const socket = new WebSocket(getWebSocketUrl())
     socketRef.current = socket
@@ -203,8 +469,11 @@ function App() {
 
     socket.addEventListener('close', () => {
       setProxyReady(false)
+      statusRef.current = 'error'
       setStatus('error')
       setStatusDetail('The local WebSocket proxy is unavailable.')
+      setIsHeaderVisible(true)
+      triggerBufferRef.current = ''
     })
 
     socket.addEventListener('message', (event) => {
@@ -214,6 +483,12 @@ function App() {
       }
 
       if (message.type === 'terminal') {
+        const triggerResult = consumeTriggerText(message.text, triggerBufferRef.current, triggersRef.current)
+        triggerBufferRef.current = triggerResult.buffer
+        for (const triggerCommand of triggerResult.commands) {
+          dispatchInputText(triggerCommand, { rememberInHistory: false })
+        }
+
         const html = ansiConverterRef.current.toHtml(message.text)
         setTerminalChunks((current) => {
           const next = [...current, html]
@@ -223,8 +498,10 @@ function App() {
       }
 
       if (message.type === 'connection-status') {
+        statusRef.current = message.status
         setStatus(message.status)
         setStatusDetail(message.detail)
+        setIsHeaderVisible(message.status !== 'connected')
 
         if (message.status === 'connecting' || message.status === 'disconnected') {
           setMudState({})
@@ -232,9 +509,12 @@ function App() {
 
         if (message.status === 'connected') {
           ansiConverterRef.current = createAnsiConverter()
+          triggerBufferRef.current = ''
           setTerminalChunks([
             '<span class="terminal-muted">Connected. Waiting for room text and MSDP updates...</span>',
           ])
+        } else {
+          triggerBufferRef.current = ''
         }
 
         return
@@ -247,13 +527,13 @@ function App() {
       socket.close()
       socketRef.current = null
     }
-  }, [])
+  }, [dispatchInputText])
 
   useEffect(() => {
-    if (terminalRef.current) {
+    if (terminalRef.current && clientSettings.terminal.autoScroll) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
     }
-  }, [terminalChunks])
+  }, [clientSettings.terminal.autoScroll, terminalChunks])
 
   const bars = useMemo<BarConfig[]>(
     () => [
@@ -301,10 +581,31 @@ function App() {
 
   const canConnect = proxyReady && status !== 'connecting'
   const connected = status === 'connected'
-
-  useEffect(() => {
-    setIsHeaderVisible(!connected)
-  }, [connected])
+  const activeMsdpVariables = useMemo(() => normalizeMsdpVariableMap(clientSettings.msdp), [clientSettings.msdp])
+  const terminalOutputStyle = useMemo<CSSProperties>(
+    () => ({
+      fontSize: `${clientSettings.terminal.fontSize}px`,
+      lineHeight: clientSettings.terminal.lineHeight,
+      whiteSpace: clientSettings.terminal.wrapLines ? 'pre-wrap' : 'pre',
+      wordBreak: clientSettings.terminal.wrapLines ? 'break-word' : 'normal',
+    }),
+    [clientSettings.terminal.fontSize, clientSettings.terminal.lineHeight, clientSettings.terminal.wrapLines],
+  )
+  const minimapStyle = useMemo<CSSProperties>(
+    () => ({
+      fontSize: `${clientSettings.minimap.fontSize}px`,
+      height: `${clientSettings.minimap.paneHeight}rem`,
+      minHeight: `${clientSettings.minimap.paneHeight}rem`,
+    }),
+    [clientSettings.minimap.fontSize, clientSettings.minimap.paneHeight],
+  )
+  const sidebarPanelStyle = useMemo<CSSProperties>(
+    () => ({
+      fontFamily: SIDEBAR_FONT_FAMILIES[clientSettings.sidebar.fontFamily],
+      fontSize: `${clientSettings.sidebar.fontSize}px`,
+    }),
+    [clientSettings.sidebar.fontFamily, clientSettings.sidebar.fontSize],
+  )
 
   const mapOutput = useMemo(() => buildMapOutput(mudState), [mudState])
   const selectedMudPreset = useMemo(
@@ -322,41 +623,18 @@ function App() {
     ],
     [mudState.charisma, mudState.constitution, mudState.dexterity, mudState.intelligence, mudState.strength, mudState.wisdom],
   )
+  const savingThrows = useMemo(
+    () => [
+      { label: 'Fort', value: mudState.fortitude },
+      { label: 'Refl', value: mudState.reflex },
+      { label: 'Will', value: mudState.willpower },
+    ],
+    [mudState.fortitude, mudState.reflex, mudState.willpower],
+  )
   const characterHeading = useMemo(
     () => formatCharacterHeading(mudState.characterName, mudState.title),
     [mudState.characterName, mudState.title],
   )
-
-  const sendMessage = useCallback((message: ClientMessage) => {
-    const socket = socketRef.current
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setStatus('error')
-      setStatusDetail('The local WebSocket proxy is unavailable.')
-      return
-    }
-
-    socket.send(JSON.stringify(message))
-  }, [])
-
-  const sendInputLine = useCallback(
-    (text: string) => {
-      if (!connected) {
-        return
-      }
-
-      sendMessage({ type: 'input', text })
-    },
-    [connected, sendMessage],
-  )
-
-  const rememberCommand = useCallback((text: string) => {
-    const normalized = text.trim().toLowerCase()
-    if (!normalized || MOVEMENT_COMMANDS.has(normalized)) {
-      return
-    }
-
-    setCommandHistory((current) => [...current, text].slice(-COMMAND_HISTORY_LIMIT))
-  }, [])
 
   useEffect(() => {
     if (!proxyReady) {
@@ -372,7 +650,7 @@ function App() {
     }
 
     function handlePointerDown(event: PointerEvent) {
-      if (event.target === commandInputRef.current) {
+      if (event.target === commandInputRef.current || shouldPreservePointerFocus(event.target)) {
         return
       }
 
@@ -390,6 +668,14 @@ function App() {
       return
     }
 
+    sendMessage({ type: 'msdp-config', msdpVariables: activeMsdpVariables })
+  }, [activeMsdpVariables, connected, sendMessage])
+
+  useEffect(() => {
+    if (!connected) {
+      return
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (event.altKey || event.ctrlKey || event.metaKey) {
         return
@@ -401,11 +687,10 @@ function App() {
       }
 
       event.preventDefault()
-      rememberCommand(command)
       setHistoryIndex(null)
       setHistoryDraft('')
       setCommand('')
-      sendInputLine(command)
+      dispatchInputText(command)
       focusCommandInput(commandInputRef.current)
     }
 
@@ -413,7 +698,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [connected, rememberCommand, sendInputLine])
+  }, [connected, dispatchInputText])
 
   function handleConnectionSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -423,9 +708,10 @@ function App() {
       return
     }
 
+    statusRef.current = 'connecting'
     setStatus('connecting')
     setStatusDetail(`Connecting to ${host}:${port}...`)
-    sendMessage({ type: 'connect', host, port })
+    sendMessage({ type: 'connect', host, port, msdpVariables: activeMsdpVariables })
   }
 
   function handleMudPresetChange(mudId: string) {
@@ -464,10 +750,9 @@ function App() {
       return
     }
 
-    rememberCommand(command)
     setHistoryIndex(null)
     setHistoryDraft('')
-    sendInputLine(command)
+    dispatchInputText(command)
     setCommand('')
     focusCommandInput(commandInputRef.current)
   }
@@ -536,18 +821,558 @@ function App() {
     setCommand(historyDraft)
   }
 
+  function updateAlias(aliasId: string, updates: Partial<AliasDefinition>) {
+    setAliases((current) => current.map((alias) => (alias.id === aliasId ? { ...alias, ...updates } : alias)))
+  }
+
+  function updateTrigger(triggerId: string, updates: Partial<TriggerDefinition>) {
+    setTriggers((current) =>
+      current.map((trigger) => (trigger.id === triggerId ? { ...trigger, ...updates } : trigger)),
+    )
+  }
+
+  function toggleAutomationMenu(menuId: AutomationMenuId) {
+    setOpenAutomationMenu((current) => (current === menuId ? null : menuId))
+  }
+
+  function handleAddAlias() {
+    setAliases((current) => [...current, createEmptyAlias()])
+    setAutomationNotice(null)
+  }
+
+  function handleAddTrigger() {
+    setTriggers((current) => [...current, createEmptyTrigger()])
+    setAutomationNotice(null)
+  }
+
+  function updateTerminalSettings(updates: Partial<ClientSettings['terminal']>) {
+    setClientSettings((current) => ({
+      ...current,
+      terminal: {
+        ...current.terminal,
+        ...updates,
+      },
+    }))
+    setAutomationNotice(null)
+  }
+
+  function updateMinimapSettings(updates: Partial<ClientSettings['minimap']>) {
+    setClientSettings((current) => ({
+      ...current,
+      minimap: {
+        ...current.minimap,
+        ...updates,
+      },
+    }))
+    setAutomationNotice(null)
+  }
+
+  function updateSidebarSettings(updates: Partial<ClientSettings['sidebar']>) {
+    setClientSettings((current) => ({
+      ...current,
+      sidebar: {
+        ...current.sidebar,
+        ...updates,
+      },
+    }))
+    setAutomationNotice(null)
+  }
+
+  function updateMsdpVariable(key: MsdpVariableKey, nextValue: string) {
+    setClientSettings((current) => ({
+      ...current,
+      msdp: {
+        ...current.msdp,
+        [key]: nextValue,
+      },
+    }))
+    setAutomationNotice(null)
+  }
+
+  function handleConfigExport() {
+    downloadJsonFile('luminari-web-client-config.json', {
+      type: 'luminari-web-client-config',
+      version: CLIENT_CONFIG_EXPORT_VERSION,
+      settings: normalizeClientSettings(clientSettings),
+      aliases,
+      triggers,
+    })
+    setOpenAutomationMenu(null)
+    setAutomationNotice({
+      kind: 'success',
+      text: `Saved settings, ${aliases.length} alias${pluralize(aliases.length)}, and ${triggers.length} trigger${pluralize(triggers.length)} to file.`,
+    })
+  }
+
+  async function handleConfigImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) {
+      return
+    }
+
+    try {
+      const importedConfig = parseClientConfigImport(await file.text(), clientSettings, aliases, triggers)
+      setClientSettings(importedConfig.settings)
+      setAliases(importedConfig.aliases)
+      setTriggers(importedConfig.triggers)
+      setOpenAutomationMenu(null)
+      setAutomationNotice({
+        kind: 'success',
+        text: `Loaded settings, ${importedConfig.aliases.length} alias${pluralize(importedConfig.aliases.length)}, and ${importedConfig.triggers.length} trigger${pluralize(importedConfig.triggers.length)} from ${file.name}.`,
+      })
+    } catch (error) {
+      setAutomationNotice({
+        kind: 'error',
+        text: error instanceof Error ? error.message : 'Failed to load configuration.',
+      })
+    }
+  }
+
+  function handleTerminalClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!connected || event.button !== 0 || hasExpandedSelection()) {
+      return
+    }
+
+    focusCommandInput(commandInputRef.current)
+  }
+
   return (
     <div className="app-shell">
-      {connected ? (
-        <div className="header-toggle-row">
-          <button type="button" className="header-toggle" onClick={() => setIsHeaderVisible((current) => !current)}>
-            {isHeaderVisible ? 'Hide header' : 'Show header'}
-          </button>
+      <div ref={menuBarRef} className="window-menu-bar panel" data-prevent-command-focus>
+        <div className="window-menu-links" role="menubar" aria-label="Window menu">
+          {connected ? (
+            <button type="button" className="window-menu-link" onClick={() => setIsHeaderVisible((current) => !current)}>
+              {isHeaderVisible ? 'Hide Header' : 'Show Header'}
+            </button>
+          ) : null}
+
+          <div className="window-menu-item">
+            <button
+              type="button"
+              className={`window-menu-link${openAutomationMenu === 'aliases' ? ' window-menu-link-open' : ''}`}
+              aria-expanded={openAutomationMenu === 'aliases'}
+              onClick={() => toggleAutomationMenu('aliases')}
+            >
+              Aliases
+            </button>
+
+            {openAutomationMenu === 'aliases' ? (
+              <div className="window-menu-dropdown">
+                <div className="automation-menu-content">
+                  <div className="automation-section-header">
+                    <div>
+                      <h3>Aliases</h3>
+                      <p>Literal aliases match the command name and put remaining text into %1.</p>
+                    </div>
+
+                    <div className="automation-actions">
+                      <button type="button" onClick={handleAddAlias}>
+                        Add
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="automation-menu-help">
+                    Use <code>*</code> as a wildcard and <code>%1</code> through <code>%9</code> in expansions.
+                  </p>
+
+                  {aliases.length === 0 ? (
+                    <p className="automation-empty">No aliases saved yet.</p>
+                  ) : (
+                    <div className="automation-list">
+                      {aliases.map((alias) => (
+                        <div key={alias.id} className="automation-item">
+                          <div className="automation-item-header">
+                            <label className="automation-toggle">
+                              <input
+                                type="checkbox"
+                                checked={alias.enabled}
+                                onChange={(event) => updateAlias(alias.id, { enabled: event.target.checked })}
+                              />
+                              <span>{alias.enabled ? 'Enabled' : 'Disabled'}</span>
+                            </label>
+
+                            <button
+                              type="button"
+                              className="automation-delete"
+                              onClick={() => setAliases((current) => current.filter((entry) => entry.id !== alias.id))}
+                            >
+                              Delete
+                            </button>
+                          </div>
+
+                          <div className="automation-fields">
+                            <label>
+                              <span>Pattern</span>
+                              <input
+                                value={alias.pattern}
+                                onChange={(event) => updateAlias(alias.id, { pattern: event.target.value })}
+                                placeholder="k *"
+                              />
+                            </label>
+
+                            <label>
+                              <span>Expansion</span>
+                              <textarea
+                                rows={2}
+                                value={alias.expansion}
+                                onChange={(event) => updateAlias(alias.id, { expansion: event.target.value })}
+                                placeholder="kill %1"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="window-menu-item">
+            <button
+              type="button"
+              className={`window-menu-link${openAutomationMenu === 'triggers' ? ' window-menu-link-open' : ''}`}
+              aria-expanded={openAutomationMenu === 'triggers'}
+              onClick={() => toggleAutomationMenu('triggers')}
+            >
+              Triggers
+            </button>
+
+            {openAutomationMenu === 'triggers' ? (
+              <div className="window-menu-dropdown">
+                <div className="automation-menu-content">
+                  <div className="automation-section-header">
+                    <div>
+                      <h3>Triggers</h3>
+                      <p>Literal trigger patterns match anywhere in a line; wildcards let you capture text.</p>
+                    </div>
+
+                    <div className="automation-actions">
+                      <button type="button" onClick={handleAddTrigger}>
+                        Add
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="automation-menu-help">
+                    Use <code>*</code> as a wildcard and <code>%1</code> through <code>%9</code> in actions.
+                  </p>
+
+                  {triggers.length === 0 ? (
+                    <p className="automation-empty">No triggers saved yet.</p>
+                  ) : (
+                    <div className="automation-list">
+                      {triggers.map((trigger) => (
+                        <div key={trigger.id} className="automation-item">
+                          <div className="automation-item-header">
+                            <label className="automation-toggle">
+                              <input
+                                type="checkbox"
+                                checked={trigger.enabled}
+                                onChange={(event) => updateTrigger(trigger.id, { enabled: event.target.checked })}
+                              />
+                              <span>{trigger.enabled ? 'Enabled' : 'Disabled'}</span>
+                            </label>
+
+                            <button
+                              type="button"
+                              className="automation-delete"
+                              onClick={() => setTriggers((current) => current.filter((entry) => entry.id !== trigger.id))}
+                            >
+                              Delete
+                            </button>
+                          </div>
+
+                          <div className="automation-fields">
+                            <label>
+                              <span>Pattern</span>
+                              <input
+                                value={trigger.pattern}
+                                onChange={(event) => updateTrigger(trigger.id, { pattern: event.target.value })}
+                                placeholder="* tells you '*'"
+                              />
+                            </label>
+
+                            <label>
+                              <span>Action</span>
+                              <textarea
+                                rows={2}
+                                value={trigger.action}
+                                onChange={(event) => updateTrigger(trigger.id, { action: event.target.value })}
+                                placeholder="tell %1 Thanks for the message."
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="window-menu-item">
+            <button
+              type="button"
+              className={`window-menu-link${openAutomationMenu === 'msdpVars' ? ' window-menu-link-open' : ''}`}
+              aria-expanded={openAutomationMenu === 'msdpVars'}
+              onClick={() => toggleAutomationMenu('msdpVars')}
+            >
+              MSDP Vars
+            </button>
+
+            {openAutomationMenu === 'msdpVars' ? (
+              <div className="window-menu-dropdown">
+                <div className="automation-menu-content">
+                  <div className="automation-section-header">
+                    <div>
+                      <h3>MSDP Vars</h3>
+                      <p>Rename the MSDP variable names this client requests and parses.</p>
+                    </div>
+                  </div>
+
+                  <p className="automation-menu-help">
+                    These mappings are saved with your client settings and sent to the proxy when you connect.
+                  </p>
+
+                  <div className="settings-list">
+                    {MSDP_VARIABLE_GROUPS.map((group) => (
+                      <section key={group.title} className="settings-group">
+                        <div className="settings-group-header">
+                          <h4>{group.title}</h4>
+                          <p>{group.description}</p>
+                        </div>
+
+                        <div className="msdp-vars-grid">
+                          {group.fields.map((field) => (
+                            <label key={field.key}>
+                              <span>{field.label}</span>
+                              <input
+                                value={clientSettings.msdp[field.key]}
+                                onChange={(event) => updateMsdpVariable(field.key, event.target.value)}
+                                placeholder={defaultMsdpVariables[field.key]}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="window-menu-item">
+            <button
+              type="button"
+              className={`window-menu-link${openAutomationMenu === 'settings' ? ' window-menu-link-open' : ''}`}
+              aria-expanded={openAutomationMenu === 'settings'}
+              onClick={() => toggleAutomationMenu('settings')}
+            >
+              Settings
+            </button>
+
+            {openAutomationMenu === 'settings' ? (
+              <div className="window-menu-dropdown">
+                <div className="automation-menu-content">
+                  <div className="automation-section-header">
+                    <div>
+                      <h3>Settings</h3>
+                      <p>Adjust output behavior and save or load your full client configuration.</p>
+                    </div>
+
+                    <div className="automation-actions">
+                      <button type="button" onClick={() => configFileInputRef.current?.click()}>
+                        Load
+                      </button>
+                      <button type="button" onClick={handleConfigExport}>
+                        Save
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="automation-menu-help">
+                    Saved config files include display settings, MSDP variable mappings, aliases, and triggers.
+                  </p>
+
+                  <div className="settings-list">
+                    <section className="settings-group">
+                      <div className="settings-group-header">
+                        <h4>Output window</h4>
+                        <p>Fine-tune readability and scrolling in the main MUD output pane.</p>
+                      </div>
+
+                      <div className="settings-fields">
+                        <label>
+                          <span>Font size</span>
+                          <select
+                            value={String(clientSettings.terminal.fontSize)}
+                            onChange={(event) =>
+                              updateTerminalSettings({ fontSize: Number.parseInt(event.target.value, 10) })
+                            }
+                          >
+                            {OUTPUT_FONT_SIZE_OPTIONS.map((fontSize) => (
+                              <option key={fontSize} value={fontSize}>
+                                {fontSize}px
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          <span>Line spacing</span>
+                          <select
+                            value={String(clientSettings.terminal.lineHeight)}
+                            onChange={(event) =>
+                              updateTerminalSettings({ lineHeight: Number.parseFloat(event.target.value) })
+                            }
+                          >
+                            {OUTPUT_LINE_HEIGHT_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      <div className="settings-toggle-list">
+                        <label className="automation-toggle">
+                          <input
+                            type="checkbox"
+                            checked={clientSettings.terminal.autoScroll}
+                            onChange={(event) => updateTerminalSettings({ autoScroll: event.target.checked })}
+                          />
+                          <span>Auto-scroll when new output arrives</span>
+                        </label>
+
+                        <label className="automation-toggle">
+                          <input
+                            type="checkbox"
+                            checked={clientSettings.terminal.wrapLines}
+                            onChange={(event) => updateTerminalSettings({ wrapLines: event.target.checked })}
+                          />
+                          <span>Wrap long lines in the output window</span>
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="settings-group">
+                      <div className="settings-group-header">
+                        <h4>Minimap</h4>
+                        <p>Control the map text size and how tall the map pane stays.</p>
+                      </div>
+
+                      <div className="settings-fields">
+                        <label>
+                          <span>Font size</span>
+                          <input
+                            type="number"
+                            min={8}
+                            max={48}
+                            step={1}
+                            inputMode="numeric"
+                            value={clientSettings.minimap.fontSize}
+                            onChange={(event) => {
+                              const nextValue = parsePositiveIntegerInput(event.target.value)
+                              if (nextValue !== null) {
+                                updateMinimapSettings({ fontSize: nextValue })
+                              }
+                            }}
+                          />
+                        </label>
+
+                        <label>
+                          <span>Pane height</span>
+                          <input
+                            type="number"
+                            min={6}
+                            max={48}
+                            step={1}
+                            inputMode="numeric"
+                            value={clientSettings.minimap.paneHeight}
+                            onChange={(event) => {
+                              const nextValue = parsePositiveIntegerInput(event.target.value)
+                              if (nextValue !== null) {
+                                updateMinimapSettings({ paneHeight: nextValue })
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="settings-group">
+                      <div className="settings-group-header">
+                        <h4>Sidebar panels</h4>
+                        <p>Use one shared font for character info, quests, group, and affects.</p>
+                      </div>
+
+                      <div className="settings-fields">
+                        <label>
+                          <span>Panel font</span>
+                          <select
+                            value={clientSettings.sidebar.fontFamily}
+                            onChange={(event) => {
+                              if (isSidebarFontFamily(event.target.value)) {
+                                updateSidebarSettings({ fontFamily: event.target.value })
+                              }
+                            }}
+                          >
+                            {SIDEBAR_FONT_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          <span>Panel font size</span>
+                          <input
+                            type="number"
+                            min={8}
+                            max={32}
+                            step={1}
+                            inputMode="numeric"
+                            value={clientSettings.sidebar.fontSize}
+                            onChange={(event) => {
+                              const nextValue = parsePositiveIntegerInput(event.target.value)
+                              if (nextValue !== null) {
+                                updateSidebarSettings({ fontSize: nextValue })
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
-      ) : null}
+
+        {automationNotice ? (
+          <p className={`window-menu-status window-menu-status-${automationNotice.kind}`}>{automationNotice.text}</p>
+        ) : null}
+
+        <input
+          ref={configFileInputRef}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={handleConfigImport}
+        />
+      </div>
 
       {isHeaderVisible ? (
-        <div className="app-header">
+        <div className="app-header" data-prevent-command-focus>
           <header className="topbar">
             <div>
               <p className="eyebrow">{uiSettings.personalization.eyebrow}</p>
@@ -602,16 +1427,12 @@ function App() {
 
       <main className="layout">
         <section className="terminal-column panel">
-          <div className="panel-header">
-            <div>
-              <h2>Terminal</h2>
-              <p>Raw game output, with ANSI colors preserved.</p>
-            </div>
-          </div>
-
           <div
             ref={terminalRef}
             className="terminal-output"
+            data-prevent-command-focus
+            onClick={handleTerminalClick}
+            style={terminalOutputStyle}
             dangerouslySetInnerHTML={{ __html: terminalChunks.join('') }}
           />
 
@@ -655,7 +1476,7 @@ function App() {
               </div>
             </div>
 
-            <pre className="minimap" dangerouslySetInnerHTML={{ __html: renderMudHtml(mapOutput) }} />
+            <pre className="minimap" style={minimapStyle} dangerouslySetInnerHTML={{ __html: renderMudHtml(mapOutput) }} />
           </section>
 
           <section className="panel tabbed-panel">
@@ -674,7 +1495,7 @@ function App() {
               ))}
             </div>
 
-            <div className="tab-panel" role="tabpanel">
+            <div className="tab-panel" role="tabpanel" style={sidebarPanelStyle}>
               {activeSidebarTab === 'character' ? (
                 <>
                   <div className="identity-block">
@@ -699,6 +1520,15 @@ function App() {
                       <div key={score.label} className="ability-cell">
                         <span className="ability-label">{score.label}</span>
                         <span className="ability-value">{formatNumber(score.value) ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="saving-throw-grid" aria-label="Saving throws">
+                    {savingThrows.map((save) => (
+                      <div key={save.label} className="saving-throw-cell">
+                        <span className="saving-throw-label">{save.label}</span>
+                        <span className="saving-throw-value">{formatSignedNumber(save.value)}</span>
                       </div>
                     ))}
                   </div>
@@ -738,6 +1568,606 @@ function App() {
       </main>
     </div>
   )
+}
+
+function createEmptyAlias(): AliasDefinition {
+  return {
+    id: createAutomationId('alias'),
+    pattern: '',
+    expansion: '',
+    enabled: true,
+  }
+}
+
+function createEmptyTrigger(): TriggerDefinition {
+  return {
+    id: createAutomationId('trigger'),
+    pattern: '',
+    action: '',
+    enabled: true,
+  }
+}
+
+function createAutomationId(prefix: string) {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function expandAliasCommands(text: string, aliases: AliasDefinition[], depth = 0): string[] {
+  const trimmedText = text.trim()
+  if (!trimmedText) {
+    return []
+  }
+
+  if (depth >= AUTOMATION_RECURSION_LIMIT) {
+    return [trimmedText]
+  }
+
+  for (const alias of aliases) {
+    if (!alias.enabled) {
+      continue
+    }
+
+    const match = matchAliasPattern(trimmedText, alias.pattern)
+    if (!match) {
+      continue
+    }
+
+    const expandedText = substituteCaptures(alias.expansion, trimmedText, match.captures)
+    const splitCommands = splitCommandSequence(expandedText)
+    if (splitCommands.length === 0) {
+      return []
+    }
+
+    return splitCommands.flatMap((command) => expandAliasCommands(command, aliases, depth + 1))
+  }
+
+  return [trimmedText]
+}
+
+function consumeTriggerText(text: string, buffer: string, triggers: TriggerDefinition[]) {
+  const normalizedText = stripMudFormatting(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const combined = `${buffer}${normalizedText}`
+  const segments = combined.split('\n')
+  const nextBuffer = segments.pop() ?? ''
+  const commands: string[] = []
+
+  for (const segment of segments) {
+    const line = segment.trim()
+    if (!line) {
+      continue
+    }
+
+    for (const trigger of triggers) {
+      if (!trigger.enabled) {
+        continue
+      }
+
+      const match = matchTriggerPattern(line, trigger.pattern)
+      if (!match) {
+        continue
+      }
+
+      const actionText = substituteCaptures(trigger.action, line, match.captures)
+      commands.push(...splitCommandSequence(actionText))
+    }
+  }
+
+  return { buffer: nextBuffer, commands }
+}
+
+function matchAliasPattern(text: string, pattern: string) {
+  const trimmedPattern = pattern.trim()
+  if (!trimmedPattern) {
+    return null
+  }
+
+  if (trimmedPattern.includes('*')) {
+    return matchWildcardPattern(text, trimmedPattern)
+  }
+
+  const normalizedText = text.toLowerCase()
+  const normalizedPattern = trimmedPattern.toLowerCase()
+  if (normalizedText === normalizedPattern) {
+    return { captures: [''] }
+  }
+
+  if (normalizedText.startsWith(`${normalizedPattern} `)) {
+    return { captures: [text.slice(trimmedPattern.length).trimStart()] }
+  }
+
+  return null
+}
+
+function matchTriggerPattern(text: string, pattern: string) {
+  const trimmedPattern = pattern.trim()
+  if (!trimmedPattern) {
+    return null
+  }
+
+  if (trimmedPattern.includes('*')) {
+    return matchWildcardPattern(text, trimmedPattern)
+  }
+
+  return text.toLowerCase().includes(trimmedPattern.toLowerCase()) ? { captures: [] } : null
+}
+
+function matchWildcardPattern(text: string, pattern: string) {
+  const escapedSegments = pattern.trim().split('*').map(escapeRegExp)
+  const matcher = new RegExp(`^${escapedSegments.join('(.*?)')}$`, 'i')
+  const match = matcher.exec(text)
+  if (!match) {
+    return null
+  }
+
+  return { captures: match.slice(1).map((capture) => capture.trim()) }
+}
+
+function substituteCaptures(template: string, source: string, captures: string[]) {
+  return template.replace(/%(\d)/g, (_match, indexText: string) => {
+    const index = Number(indexText)
+    if (index === 0) {
+      return source
+    }
+
+    return captures[index - 1] ?? ''
+  })
+}
+
+function splitCommandSequence(value: string) {
+  return value
+    .split(/\r?\n|;/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function stripMudFormatting(value: string) {
+  return convertLuminariColorCodes(value).replace(ANSI_ESCAPE_PATTERN, '')
+}
+
+function loadAliasesFromCookies() {
+  return parsePersistedAliases(readChunkedCookie(ALIASES_COOKIE_NAME))
+}
+
+function loadTriggersFromCookies() {
+  return parsePersistedTriggers(readChunkedCookie(TRIGGERS_COOKIE_NAME))
+}
+
+function loadClientSettingsFromCookies() {
+  return parsePersistedClientSettings(readChunkedCookie(CLIENT_SETTINGS_COOKIE_NAME))
+}
+
+function saveAliasesToCookies(aliases: AliasDefinition[]) {
+  writeChunkedCookie(ALIASES_COOKIE_NAME, JSON.stringify(aliases))
+}
+
+function saveTriggersToCookies(triggers: TriggerDefinition[]) {
+  writeChunkedCookie(TRIGGERS_COOKIE_NAME, JSON.stringify(triggers))
+}
+
+function saveClientSettingsToCookies(settings: ClientSettings) {
+  writeChunkedCookie(CLIENT_SETTINGS_COOKIE_NAME, JSON.stringify(settings))
+}
+
+function parsePersistedAliases(value: string | null) {
+  if (!value) {
+    return []
+  }
+
+  try {
+    return normalizeAliases(JSON.parse(value))
+  } catch {
+    return []
+  }
+}
+
+function parsePersistedTriggers(value: string | null) {
+  if (!value) {
+    return []
+  }
+
+  try {
+    return normalizeTriggers(JSON.parse(value))
+  } catch {
+    return []
+  }
+}
+
+function parsePersistedClientSettings(value: string | null) {
+  if (!value) {
+    return DEFAULT_CLIENT_SETTINGS
+  }
+
+  try {
+    return normalizeClientSettings(JSON.parse(value))
+  } catch {
+    return DEFAULT_CLIENT_SETTINGS
+  }
+}
+
+function parseAliasImport(content: string) {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    throw new Error('Alias file is not valid JSON.')
+  }
+
+  return normalizeAliases(extractImportedEntries(parsed, 'aliases'), 'Alias file must contain an aliases array.')
+}
+
+function parseTriggerImport(content: string) {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    throw new Error('Trigger file is not valid JSON.')
+  }
+
+  return normalizeTriggers(extractImportedEntries(parsed, 'triggers'), 'Trigger file must contain a triggers array.')
+}
+
+function parseClientConfigImport(
+  content: string,
+  currentSettings: ClientSettings,
+  currentAliases: AliasDefinition[],
+  currentTriggers: TriggerDefinition[],
+) {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    throw new Error('Configuration file is not valid JSON.')
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Configuration file must be a JSON object.')
+  }
+
+  const record = parsed as Record<string, unknown>
+  const type = record.type
+
+  if ('settings' in record) {
+    return {
+      settings: normalizeClientSettings(record.settings, 'Configuration file must contain a settings object.'),
+      aliases: normalizeAliases(extractImportedEntries(record, 'aliases'), 'Configuration file must contain an aliases array.'),
+      triggers: normalizeTriggers(
+        extractImportedEntries(record, 'triggers'),
+        'Configuration file must contain a triggers array.',
+      ),
+    }
+  }
+
+  if (type === 'luminari-web-client-aliases' || ('aliases' in record && !('triggers' in record))) {
+    return {
+      settings: currentSettings,
+      aliases: parseAliasImport(content),
+      triggers: currentTriggers,
+    }
+  }
+
+  if (type === 'luminari-web-client-triggers' || ('triggers' in record && !('aliases' in record))) {
+    return {
+      settings: currentSettings,
+      aliases: currentAliases,
+      triggers: parseTriggerImport(content),
+    }
+  }
+
+  throw new Error('Configuration file must include settings, aliases, and triggers.')
+}
+
+function extractImportedEntries(parsed: unknown, key: 'aliases' | 'triggers') {
+  if (Array.isArray(parsed)) {
+    return parsed
+  }
+
+  if (parsed && typeof parsed === 'object' && key in parsed) {
+    const nestedEntries = (parsed as Record<string, unknown>)[key]
+    if (Array.isArray(nestedEntries)) {
+      return nestedEntries
+    }
+  }
+
+  throw new Error(key === 'aliases' ? 'Alias file must contain an aliases array.' : 'Trigger file must contain a triggers array.')
+}
+
+function normalizeClientSettings(value: unknown, emptyStateMessage?: string): ClientSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (emptyStateMessage) {
+      throw new Error(emptyStateMessage)
+    }
+
+    return DEFAULT_CLIENT_SETTINGS
+  }
+
+  const record = value as Record<string, unknown>
+  const terminalValue = record.terminal
+  if (!terminalValue || typeof terminalValue !== 'object' || Array.isArray(terminalValue)) {
+    if (emptyStateMessage) {
+      throw new Error('Configuration settings must include a terminal object.')
+    }
+
+    return DEFAULT_CLIENT_SETTINGS
+  }
+
+  const terminalRecord = terminalValue as Record<string, unknown>
+  const minimapRecord = isObjectRecord(record.minimap) ? record.minimap : null
+  const sidebarRecord = isObjectRecord(record.sidebar) ? record.sidebar : null
+
+  return {
+    terminal: {
+      fontSize: clampNumber(readNumericSetting(terminalRecord.fontSize), 10, 32, DEFAULT_CLIENT_SETTINGS.terminal.fontSize),
+      lineHeight: clampNumber(
+        readNumericSetting(terminalRecord.lineHeight),
+        1.2,
+        2.2,
+        DEFAULT_CLIENT_SETTINGS.terminal.lineHeight,
+      ),
+      autoScroll:
+        typeof terminalRecord.autoScroll === 'boolean'
+          ? terminalRecord.autoScroll
+          : DEFAULT_CLIENT_SETTINGS.terminal.autoScroll,
+      wrapLines:
+        typeof terminalRecord.wrapLines === 'boolean'
+          ? terminalRecord.wrapLines
+          : DEFAULT_CLIENT_SETTINGS.terminal.wrapLines,
+    },
+    minimap: {
+      fontSize: clampNumber(
+        readNumericSetting(minimapRecord?.fontSize),
+        10,
+        32,
+        DEFAULT_CLIENT_SETTINGS.minimap.fontSize,
+      ),
+      paneHeight: clampNumber(
+        readNumericSetting(minimapRecord?.paneHeight),
+        10,
+        32,
+        DEFAULT_CLIENT_SETTINGS.minimap.paneHeight,
+      ),
+    },
+    sidebar: {
+      fontFamily: isSidebarFontFamily(sidebarRecord?.fontFamily)
+        ? sidebarRecord.fontFamily
+        : DEFAULT_CLIENT_SETTINGS.sidebar.fontFamily,
+      fontSize: clampNumber(readNumericSetting(sidebarRecord?.fontSize), 8, 32, DEFAULT_CLIENT_SETTINGS.sidebar.fontSize),
+    },
+    msdp: normalizeMsdpVariableMap(record.msdp),
+  }
+}
+
+function normalizeAliases(value: unknown, emptyStateMessage?: string): AliasDefinition[] {
+  if (!Array.isArray(value)) {
+    if (emptyStateMessage) {
+      throw new Error(emptyStateMessage)
+    }
+
+    return []
+  }
+
+  return value.map((entry, index) => normalizeAliasEntry(entry, index))
+}
+
+function normalizeTriggers(value: unknown, emptyStateMessage?: string): TriggerDefinition[] {
+  if (!Array.isArray(value)) {
+    if (emptyStateMessage) {
+      throw new Error(emptyStateMessage)
+    }
+
+    return []
+  }
+
+  return value.map((entry, index) => normalizeTriggerEntry(entry, index))
+}
+
+function normalizeAliasEntry(value: unknown, index: number): AliasDefinition {
+  if (!value || typeof value !== 'object') {
+    throw new Error(`Alias ${index + 1} is invalid.`)
+  }
+
+  const record = value as Record<string, unknown>
+  const pattern = readOptionalString(record, ['pattern', 'name'])
+  const expansion = readOptionalString(record, ['expansion', 'value', 'command'])
+
+  if (!pattern?.trim() || !expansion?.trim()) {
+    throw new Error(`Alias ${index + 1} must include both pattern and expansion.`)
+  }
+
+  return {
+    id: readOptionalString(record, ['id'])?.trim() || createAutomationId('alias'),
+    pattern,
+    expansion,
+    enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
+  }
+}
+
+function normalizeTriggerEntry(value: unknown, index: number): TriggerDefinition {
+  if (!value || typeof value !== 'object') {
+    throw new Error(`Trigger ${index + 1} is invalid.`)
+  }
+
+  const record = value as Record<string, unknown>
+  const pattern = readOptionalString(record, ['pattern', 'match'])
+  const action = readOptionalString(record, ['action', 'command', 'expansion'])
+
+  if (!pattern?.trim() || !action?.trim()) {
+    throw new Error(`Trigger ${index + 1} must include both pattern and action.`)
+  }
+
+  return {
+    id: readOptionalString(record, ['id'])?.trim() || createAutomationId('trigger'),
+    pattern,
+    action,
+    enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
+  }
+}
+
+function readOptionalString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string') {
+      return value
+    }
+  }
+
+  return undefined
+}
+
+function readNumericSetting(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  return undefined
+}
+
+function clampNumber(value: number | undefined, minimum: number, maximum: number, fallback: number) {
+  if (value === undefined) {
+    return fallback
+  }
+
+  return Math.min(Math.max(value, minimum), maximum)
+}
+
+function parsePositiveIntegerInput(value: string) {
+  if (!value.trim()) {
+    return null
+  }
+
+  const parsed = Number.parseInt(value, 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isSidebarFontFamily(value: unknown): value is SidebarFontFamily {
+  return value === 'sans' || value === 'mono' || value === 'serif'
+}
+
+function readChunkedCookie(name: string) {
+  if (typeof document === 'undefined') {
+    return null
+  }
+
+  const cookies = parseCookieMap(document.cookie)
+  const singleValue = cookies.get(name)
+  if (singleValue !== undefined) {
+    return decodeURIComponent(singleValue)
+  }
+
+  const countText = cookies.get(`${name}.count`)
+  if (!countText) {
+    return null
+  }
+
+  const count = Number(countText)
+  if (!Number.isInteger(count) || count < 1) {
+    return null
+  }
+
+  let combined = ''
+  for (let index = 0; index < count; index += 1) {
+    const chunk = cookies.get(`${name}.${index}`)
+    if (chunk === undefined) {
+      return null
+    }
+
+    combined += chunk
+  }
+
+  return decodeURIComponent(combined)
+}
+
+function writeChunkedCookie(name: string, rawValue: string) {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  clearCookieGroup(name)
+
+  const encodedValue = encodeURIComponent(rawValue)
+  const chunks = []
+  for (let index = 0; index < encodedValue.length; index += AUTOMATION_COOKIE_CHUNK_SIZE) {
+    chunks.push(encodedValue.slice(index, index + AUTOMATION_COOKIE_CHUNK_SIZE))
+  }
+
+  if (chunks.length <= 1) {
+    setCookieValue(name, encodedValue)
+    return
+  }
+
+  setCookieValue(`${name}.count`, String(chunks.length))
+  chunks.forEach((chunk, index) => {
+    setCookieValue(`${name}.${index}`, chunk)
+  })
+}
+
+function clearCookieGroup(name: string) {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  const cookies = parseCookieMap(document.cookie)
+  for (const cookieName of cookies.keys()) {
+    if (cookieName === name || cookieName === `${name}.count` || cookieName.startsWith(`${name}.`)) {
+      expireCookie(cookieName)
+    }
+  }
+}
+
+function setCookieValue(name: string, value: string) {
+  document.cookie = `${name}=${value}; max-age=${AUTOMATION_COOKIE_MAX_AGE}; path=/; SameSite=Lax`
+}
+
+function expireCookie(name: string) {
+  document.cookie = `${name}=; max-age=0; path=/; SameSite=Lax`
+}
+
+function parseCookieMap(cookieHeader: string) {
+  const cookies = new Map<string, string>()
+  if (!cookieHeader.trim()) {
+    return cookies
+  }
+
+  for (const entry of cookieHeader.split(/;\s*/)) {
+    const separatorIndex = entry.indexOf('=')
+    if (separatorIndex <= 0) {
+      continue
+    }
+
+    const key = entry.slice(0, separatorIndex)
+    const value = entry.slice(separatorIndex + 1)
+    cookies.set(key, value)
+  }
+
+  return cookies
+}
+
+function downloadJsonFile(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function pluralize(count: number) {
+  return count === 1 ? '' : 's'
 }
 
 function formatCharacterHeading(characterName?: string, title?: string) {
@@ -1267,6 +2697,18 @@ function formatNumber(value: number | undefined) {
   return value === undefined ? undefined : new Intl.NumberFormat().format(value)
 }
 
+function formatSignedNumber(value: number | undefined) {
+  if (value === undefined) {
+    return '—'
+  }
+
+  if (value > 0) {
+    return `+${value}`
+  }
+
+  return String(value)
+}
+
 function getExperienceProgress(mudState: MudState) {
   if (mudState.experienceMax === undefined) {
     return undefined
@@ -1358,6 +2800,27 @@ function luminariRgbToAnsi(code: string) {
     .map((value) => Number(value) * 51)
 
   return `\u001b[${isBackground ? 48 : 38};2;${red};${green};${blue}m`
+}
+
+function shouldPreservePointerFocus(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  return Boolean(
+    target.closest(
+      'input, textarea, select, button, label, a, summary, [data-prevent-command-focus], [contenteditable="true"]',
+    ),
+  )
+}
+
+function hasExpandedSelection() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const selection = window.getSelection()
+  return Boolean(selection && !selection.isCollapsed)
 }
 
 function focusCommandInput(input: HTMLInputElement | null) {

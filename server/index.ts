@@ -7,7 +7,19 @@ import { createServer } from 'node:http'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { RawData } from 'ws'
 import { appSettings } from '../shared/app-settings.ts'
-import type { ClientMessage, ConnectionStatus, MudState, MudValue, ServerMessage } from '../shared/mud.ts'
+import {
+  defaultMsdpVariables,
+  normalizeMsdpVariableMap,
+} from '../shared/mud.ts'
+import type {
+  ClientMessage,
+  ConnectionStatus,
+  MsdpVariableKey,
+  MsdpVariableMap,
+  MudState,
+  MudValue,
+  ServerMessage,
+} from '../shared/mud.ts'
 
 const IAC = 255
 const DONT = 254
@@ -36,100 +48,6 @@ const WEB_CLIENT_NAME = 'LuminariWebClient'
 const WEB_CLIENT_VERSION = '0.1.0'
 const DEFAULT_COLUMNS = 120
 const DEFAULT_ROWS = 40
-const REPORTABLE_VARIABLES = [
-  'CHARACTER_NAME',
-  'TITLE',
-  'SERVER_ID',
-  'SERVER_TIME',
-  'SNIPPET_VERSION',
-  'LEVEL',
-  'CLASS',
-  'RACE',
-  'HEALTH',
-  'HEALTH_MAX',
-  'PSP',
-  'PSP_MAX',
-  'MOVEMENT',
-  'MOVEMENT_MAX',
-  'EXPERIENCE',
-  'EXPERIENCE_MAX',
-  'EXPERIENCE_TNL',
-  'STR',
-  'DEX',
-  'CON',
-  'INT',
-  'WIS',
-  'CHA',
-  'STRENGTH',
-  'DEXTERITY',
-  'CONSTITUTION',
-  'INTELLIGENCE',
-  'WISDOM',
-  'CHARISMA',
-  'ATTACK_BONUS',
-  'DAMAGE_BONUS',
-  'AC',
-  'ALIGNMENT',
-  'PRACTICE',
-  'MONEY',
-  'POSITION',
-  'ROOM',
-  'ROOM_NAME',
-  'AREA_NAME',
-  'ROOM_VNUM',
-  'ROOM_EXITS',
-  'AUTOMAP',
-  'MINIMAP',
-  'WORLD_TIME',
-  'AFFECTS',
-  'ACTIONS',
-  'GROUP',
-    'QUEST_INFO',
-  'OPPONENT_NAME',
-  'OPPONENT_HEALTH',
-  'OPPONENT_HEALTH_MAX',
-  'TANK_NAME',
-  'TANK_HEALTH',
-  'TANK_HEALTH_MAX',
-]
-const REFRESHABLE_VARIABLES = [
-  'CHARACTER_NAME',
-  'TITLE',
-  'HEALTH',
-  'HEALTH_MAX',
-  'PSP',
-  'PSP_MAX',
-  'MOVEMENT',
-  'MOVEMENT_MAX',
-  'EXPERIENCE',
-  'EXPERIENCE_MAX',
-  'EXPERIENCE_TNL',
-  'STR',
-  'DEX',
-  'CON',
-  'INT',
-  'WIS',
-  'CHA',
-  'STRENGTH',
-  'DEXTERITY',
-  'CONSTITUTION',
-  'INTELLIGENCE',
-  'WISDOM',
-  'CHARISMA',
-  'POSITION',
-  'ROOM',
-  'ROOM_NAME',
-  'AREA_NAME',
-  'ROOM_VNUM',
-  'ROOM_EXITS',
-  'MINIMAP',
-  'OPPONENT_NAME',
-  'OPPONENT_HEALTH',
-  'OPPONENT_HEALTH_MAX',
-  'TANK_NAME',
-  'TANK_HEALTH',
-  'TANK_HEALTH_MAX',
-]
 const CONTROL_BYTES = new Set([
   MSDP_VAR,
   MSDP_VAL,
@@ -171,12 +89,17 @@ wss.on('connection', (socket) => {
     }
 
     if (message.type === 'connect') {
-      session.connect(message.host, message.port)
+      session.connect(message.host, message.port, normalizeMsdpVariableMap(message.msdpVariables))
       return
     }
 
     if (message.type === 'disconnect') {
       session.disconnect('Disconnected.')
+      return
+    }
+
+    if (message.type === 'msdp-config') {
+      session.updateMsdpVariables(normalizeMsdpVariableMap(message.msdpVariables))
       return
     }
 
@@ -198,13 +121,14 @@ class MudSession {
   private parser: TelnetParser | null = null
   private state: MudState = {}
   private msdpInitialized = false
+  private msdpVariables: MsdpVariableMap = normalizeMsdpVariableMap(defaultMsdpVariables)
   private readonly browserSocket: WebSocket
 
   constructor(browserSocket: WebSocket) {
     this.browserSocket = browserSocket
   }
 
-  connect(host: string, port: number) {
+  connect(host: string, port: number, msdpVariables: MsdpVariableMap) {
     if (!isValidHost(host) || !Number.isInteger(port) || port < 1 || port > 65535) {
       this.sendStatus('error', 'Provide a valid MUD host and port.')
       return
@@ -213,6 +137,7 @@ class MudSession {
     this.disconnect('Disconnected.')
     this.state = {}
     this.msdpInitialized = false
+    this.msdpVariables = normalizeMsdpVariableMap(msdpVariables)
     this.sendStatus('connecting', `Connecting to ${host}:${port}...`)
 
     const mudSocket = net.createConnection({ host, port })
@@ -222,7 +147,7 @@ class MudSession {
         this.send({ type: 'terminal', text })
       },
       onMsdp: (variable, value) => {
-        const partial = mapMsdpUpdate(variable, value)
+        const partial = mapMsdpUpdate(variable, value, this.msdpVariables)
         if (Object.keys(partial).length === 0) {
           return
         }
@@ -260,6 +185,16 @@ class MudSession {
     })
   }
 
+  updateMsdpVariables(msdpVariables: MsdpVariableMap) {
+    this.msdpVariables = normalizeMsdpVariableMap(msdpVariables)
+
+    if (!this.msdpInitialized) {
+      return
+    }
+
+    this.applyMsdpConfiguration()
+  }
+
   disconnect(detail: string) {
     if (this.mudSocket) {
       this.mudSocket.destroy()
@@ -294,12 +229,7 @@ class MudSession {
     this.sendMsdpPair('ANSI_COLORS', 1)
     this.sendMsdpPair('256_COLORS', 1)
     this.sendMsdpPair('UTF_8', 1)
-
-    for (const variable of REPORTABLE_VARIABLES) {
-      this.sendMsdpPair('REPORT', variable)
-    }
-
-    this.requestStateRefresh()
+    this.applyMsdpConfiguration()
   }
 
   private sendMsdpPair(variable: string, value: string | number) {
@@ -322,9 +252,17 @@ class MudSession {
       return
     }
 
-    for (const variable of REFRESHABLE_VARIABLES) {
+    for (const variable of getConfiguredMsdpVariables(this.msdpVariables)) {
       this.sendMsdpPair('SEND', variable)
     }
+  }
+
+  private applyMsdpConfiguration() {
+    for (const variable of getConfiguredMsdpVariables(this.msdpVariables)) {
+      this.sendMsdpPair('REPORT', variable)
+    }
+
+    this.requestStateRefresh()
   }
 
   private cleanupSocket() {
@@ -545,7 +483,12 @@ function parseClientMessage(data: RawData): ClientMessage | null {
     const message = parsed as Record<string, unknown>
 
     if (message.type === 'connect' && typeof message.host === 'string' && typeof message.port === 'number') {
-      return { type: 'connect', host: message.host, port: message.port }
+      return {
+        type: 'connect',
+        host: message.host,
+        port: message.port,
+        msdpVariables: normalizeMsdpVariableMap(message.msdpVariables),
+      }
     }
 
     if (message.type === 'disconnect') {
@@ -554,6 +497,10 @@ function parseClientMessage(data: RawData): ClientMessage | null {
 
     if (message.type === 'input' && typeof message.text === 'string') {
       return { type: 'input', text: message.text }
+    }
+
+    if (message.type === 'msdp-config') {
+      return { type: 'msdp-config', msdpVariables: normalizeMsdpVariableMap(message.msdpVariables) }
     }
 
     return null
@@ -696,167 +643,141 @@ function normalizeScalar(value: string): MudValue {
   return value
 }
 
-function mapMsdpUpdate(variable: string, value: MudValue): Partial<MudState> {
+function getConfiguredMsdpVariables(msdpVariables: MsdpVariableMap) {
+  return [...new Set(Object.values(msdpVariables).map((value) => value.trim()).filter(Boolean))]
+}
+
+function resolveMsdpVariableKey(variable: string, msdpVariables: MsdpVariableMap): MsdpVariableKey | null {
+  for (const [key, configuredVariable] of Object.entries(msdpVariables)) {
+    if (configuredVariable === variable) {
+      return key as MsdpVariableKey
+    }
+  }
+
+  return null
+}
+
+function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVariableMap): Partial<MudState> {
+  const key = resolveMsdpVariableKey(variable, msdpVariables)
+  if (!key) {
+    return {}
+  }
+
   const partial: Partial<MudState> = {}
 
-  switch (variable) {
-    case 'SERVER_ID':
-      partial.serverId = toOptionalString(value)
-      break
-    case 'SERVER_TIME':
-      partial.serverTime = toOptionalNumber(value)
-      break
-    case 'SNIPPET_VERSION':
-      partial.snippetVersion = toOptionalNumber(value)
-      break
-    case 'CHARACTER_NAME':
+  switch (key) {
+    case 'characterName':
       partial.characterName = toOptionalString(value)
       break
-    case 'TITLE':
+    case 'title':
       partial.title = toOptionalString(value)
       break
-    case 'LEVEL':
+    case 'level':
       partial.level = toOptionalNumber(value)
       break
-    case 'RACE':
+    case 'race':
       partial.race = toOptionalString(value)
       break
-    case 'CLASS':
+    case 'className':
       partial.className = toOptionalString(value)
       break
-    case 'HEALTH':
+    case 'health':
       partial.health = toOptionalNumber(value)
       break
-    case 'HEALTH_MAX':
+    case 'healthMax':
       partial.healthMax = toOptionalNumber(value)
       break
-    case 'PSP':
+    case 'psp':
       partial.psp = toOptionalNumber(value)
       break
-    case 'PSP_MAX':
+    case 'pspMax':
       partial.pspMax = toOptionalNumber(value)
       break
-    case 'MOVEMENT':
+    case 'movement':
       partial.movement = toOptionalNumber(value)
       break
-    case 'MOVEMENT_MAX':
+    case 'movementMax':
       partial.movementMax = toOptionalNumber(value)
       break
-    case 'EXPERIENCE':
+    case 'experience':
       partial.experience = toOptionalNumber(value)
       break
-    case 'EXPERIENCE_MAX':
+    case 'experienceMax':
       partial.experienceMax = toOptionalNumber(value)
       break
-    case 'EXPERIENCE_TNL':
+    case 'experienceTnl':
       partial.experienceTnl = toOptionalNumber(value)
       break
-    case 'STR':
-    case 'STRENGTH':
+    case 'strength':
       partial.strength = toOptionalNumber(value)
       break
-    case 'DEX':
-    case 'DEXTERITY':
+    case 'dexterity':
       partial.dexterity = toOptionalNumber(value)
       break
-    case 'CON':
-    case 'CONSTITUTION':
+    case 'constitution':
       partial.constitution = toOptionalNumber(value)
       break
-    case 'INT':
-    case 'INTELLIGENCE':
+    case 'intelligence':
       partial.intelligence = toOptionalNumber(value)
       break
-    case 'WIS':
-    case 'WISDOM':
+    case 'wisdom':
       partial.wisdom = toOptionalNumber(value)
       break
-    case 'CHA':
-    case 'CHARISMA':
+    case 'charisma':
       partial.charisma = toOptionalNumber(value)
       break
-    case 'ATTACK_BONUS':
+    case 'fortitude':
+      partial.fortitude = toOptionalNumber(value)
+      break
+    case 'reflex':
+      partial.reflex = toOptionalNumber(value)
+      break
+    case 'willpower':
+      partial.willpower = toOptionalNumber(value)
+      break
+    case 'attackBonus':
       partial.attackBonus = toOptionalNumber(value)
       break
-    case 'DAMAGE_BONUS':
-      partial.damageBonus = toOptionalNumber(value)
-      break
-    case 'AC':
+    case 'armorClass':
       partial.armorClass = toOptionalNumber(value)
       break
-    case 'ALIGNMENT':
+    case 'alignment':
       partial.alignment = toOptionalString(value)
       break
-    case 'PRACTICE':
-      partial.practice = toOptionalNumber(value)
-      break
-    case 'MONEY':
+    case 'money':
       partial.money = toOptionalNumber(value)
       break
-    case 'POSITION':
+    case 'position':
       partial.position = toOptionalString(value)
       break
-    case 'ROOM':
-      partial.room = value
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        partial.roomName = toOptionalString(value.NAME)
-        partial.areaName = toOptionalString(value.AREA)
-        partial.roomVnum = toOptionalNumber(value.VNUM)
-        partial.roomExits = toStringArray(value.EXITS)
-        partial.roomTerrain = toOptionalString(value.TERRAIN)
-        partial.roomEnvironment = toOptionalString(value.ENVIRONMENT)
-        partial.roomCoords = toCoords(value.COORDS)
-      }
-      break
-    case 'ROOM_NAME':
-      partial.roomName = toOptionalString(value)
-      break
-    case 'AREA_NAME':
-      partial.areaName = toOptionalString(value)
-      break
-    case 'ROOM_VNUM':
-      partial.roomVnum = toOptionalNumber(value)
-      break
-    case 'ROOM_EXITS':
-      partial.roomExits = toStringArray(value)
-      break
-    case 'AUTOMAP':
-      partial.automap = toOptionalString(value)
-      break
-    case 'MINIMAP':
+    case 'minimap':
       partial.minimap = toOptionalString(value)
       break
-    case 'WORLD_TIME':
-      partial.worldTime = toOptionalString(value)
-      break
-    case 'ACTIONS':
-      partial.actions = value
-      break
-    case 'AFFECTS':
+    case 'affects':
       partial.affects = value
       break
-    case 'GROUP':
+    case 'group':
       partial.group = value
       break
-    case 'QUEST_INFO':
+    case 'questInfo':
       partial.questInfo = value
       break
-    case 'OPPONENT_NAME':
+    case 'opponentName':
       partial.opponentName = toOptionalString(value)
       break
-    case 'OPPONENT_HEALTH':
+    case 'opponentHealth':
       partial.opponentHealth = toOptionalNumber(value)
       break
-    case 'OPPONENT_HEALTH_MAX':
+    case 'opponentHealthMax':
       partial.opponentHealthMax = toOptionalNumber(value)
       break
-    case 'TANK_NAME':
+    case 'tankName':
       partial.tankName = toOptionalString(value)
       break
-    case 'TANK_HEALTH':
+    case 'tankHealth':
       partial.tankHealth = toOptionalNumber(value)
       break
-    case 'TANK_HEALTH_MAX':
+    case 'tankHealthMax':
       partial.tankHealthMax = toOptionalNumber(value)
       break
     default:
@@ -888,58 +809,4 @@ function toOptionalString(value: MudValue) {
   }
 
   return undefined
-}
-
-function toStringArray(value: MudValue): string[] | undefined {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => {
-      const text = toOptionalString(item)
-      return text ? [text] : []
-    })
-  }
-
-  if (value && typeof value === 'object') {
-    return Object.keys(value).sort(sortDirections)
-  }
-
-  if (typeof value === 'string') {
-    return value
-      .split(/\s+/)
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-  }
-
-  return undefined
-}
-
-function toCoords(value: MudValue) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined
-  }
-
-  return {
-    x: toOptionalNumber(value.X),
-    y: toOptionalNumber(value.Y),
-    z: toOptionalNumber(value.Z),
-  }
-}
-
-function sortDirections(left: string, right: string) {
-  const order = ['n', 'north', 'ne', 'northeast', 'e', 'east', 'se', 'southeast', 's', 'south', 'sw', 'southwest', 'w', 'west', 'nw', 'northwest', 'u', 'up', 'd', 'down', 'in', 'out']
-  const leftIndex = order.indexOf(left.toLowerCase())
-  const rightIndex = order.indexOf(right.toLowerCase())
-
-  if (leftIndex === -1 && rightIndex === -1) {
-    return left.localeCompare(right)
-  }
-
-  if (leftIndex === -1) {
-    return 1
-  }
-
-  if (rightIndex === -1) {
-    return -1
-  }
-
-  return leftIndex - rightIndex
 }
