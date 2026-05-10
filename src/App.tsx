@@ -750,9 +750,17 @@ function App() {
       return
     }
 
+    const trimmedCommand = command.trim()
+
     setHistoryIndex(null)
     setHistoryDraft('')
-    dispatchInputText(command)
+
+    if (!trimmedCommand) {
+      sendInputLine('')
+    } else {
+      dispatchInputText(command)
+    }
+
     setCommand('')
     focusCommandInput(commandInputRef.current)
   }
