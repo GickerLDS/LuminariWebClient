@@ -117,10 +117,12 @@ const NUMPAD_COMMANDS: Record<string, string> = {
 }
 
 type BarConfig = {
+  id: string
   label: string
-  overlayLabel?: string
-  value?: number
-  max?: number
+  valueText: string
+  percentage: number
+  ariaLabel: string
+  availabilityKind: 'present' | 'loading' | 'offline' | 'error' | 'unavailable'
   accentClass: string
 }
 
@@ -536,47 +538,67 @@ function App() {
   }, [clientSettings.terminal.autoScroll, terminalChunks])
 
   const bars = useMemo<BarConfig[]>(
-    () => [
-      {
-        label: 'HP',
-        value: mudState.health,
-        max: mudState.healthMax,
-        accentClass: 'bar-health',
-      },
-      {
-        label: 'PSP',
-        value: mudState.psp,
-        max: mudState.pspMax,
-        accentClass: 'bar-psp',
-      },
-      {
-        label: 'Move',
-        value: mudState.movement,
-        max: mudState.movementMax,
-        accentClass: 'bar-movement',
-      },
-      {
-        label: 'EXP',
-        value: getExperienceProgress(mudState),
-        max: mudState.experienceMax,
-        accentClass: 'bar-exp',
-      },
-      {
-        label: 'Opp',
-        overlayLabel: mudState.opponentName,
-        value: mudState.opponentHealth,
-        max: mudState.opponentHealthMax,
-        accentClass: 'bar-opponent',
-      },
-      {
-        label: 'Tank',
-        overlayLabel: mudState.tankName,
-        value: mudState.tankHealth,
-        max: mudState.tankHealthMax,
-        accentClass: 'bar-tank',
-      },
-    ],
-    [mudState],
+    () => {
+      const baseBars = [
+        buildHudBar({
+          id: 'health',
+          status,
+          label: 'HP',
+          value: mudState.health,
+          max: mudState.healthMax,
+          accentClass: 'bar-health',
+        }),
+        buildHudBar({
+          id: 'psp',
+          status,
+          label: 'PSP',
+          value: mudState.psp,
+          max: mudState.pspMax,
+          accentClass: 'bar-psp',
+        }),
+        buildHudBar({
+          id: 'movement',
+          status,
+          label: 'Move',
+          value: mudState.movement,
+          max: mudState.movementMax,
+          accentClass: 'bar-movement',
+        }),
+        buildHudBar({
+          id: 'experience',
+          status,
+          label: 'EXP',
+          value: getExperienceProgress(mudState),
+          max: mudState.experienceMax,
+          accentClass: 'bar-exp',
+        }),
+      ]
+
+      if (!hasCombatGaugeData(mudState)) {
+        return baseBars
+      }
+
+      return [
+        ...baseBars,
+        buildHudBar({
+          id: 'opponent',
+          status,
+          label: mudState.opponentName?.trim() || 'Opp',
+          value: mudState.opponentHealth,
+          max: mudState.opponentHealthMax,
+          accentClass: 'bar-opponent',
+        }),
+        buildHudBar({
+          id: 'tank',
+          status,
+          label: mudState.tankName?.trim() || 'Tank',
+          value: mudState.tankHealth,
+          max: mudState.tankHealthMax,
+          accentClass: 'bar-tank',
+        }),
+      ]
+    },
+    [mudState, status],
   )
 
   const canConnect = proxyReady && status !== 'connecting'
@@ -1446,14 +1468,7 @@ function App() {
 
           <div className="bars">
             {bars.map((bar) => (
-              <StatusBar
-                key={bar.label}
-                label={bar.label}
-                overlayLabel={bar.overlayLabel}
-                value={bar.value}
-                max={bar.max}
-                accentClass={bar.accentClass}
-              />
+              <StatusBar key={bar.id} bar={bar} />
             ))}
           </div>
 
@@ -2201,30 +2216,25 @@ function formatCharacterHeading(characterName?: string, title?: string) {
 }
 
 type StatusBarProps = {
-  label: string
-  overlayLabel?: string
-  value?: number
-  max?: number
-  accentClass: string
+  bar: BarConfig
 }
 
-function StatusBar({ label, overlayLabel, value, max, accentClass }: StatusBarProps) {
-  const safeMax = max && max > 0 ? max : 0
-  const percentage = safeMax > 0 && value !== undefined ? Math.min((value / safeMax) * 100, 100) : 0
-  const counter =
-    value !== undefined && max !== undefined
-      ? `${formatNumber(value)} / ${formatNumber(max)}`
-      : 'Waiting'
-  const trimmedOverlayLabel = overlayLabel?.trim()
-  const displayLabel = trimmedOverlayLabel ? `${label}: ${trimmedOverlayLabel}` : label
-
+function StatusBar({ bar }: StatusBarProps) {
   return (
     <div className="status-bar">
-      <div className="bar-track">
-        <div className={`bar-fill ${accentClass}`} style={{ width: `${percentage}%` }} />
+      <div
+        className={`bar-track bar-state-${bar.availabilityKind}`}
+        role="meter"
+        aria-label={bar.ariaLabel}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(bar.percentage)}
+        title={bar.ariaLabel}
+      >
+        <div className={`bar-fill ${bar.accentClass}`} style={{ width: `${bar.percentage}%` }} />
         <div className="bar-overlay">
-          <span className="bar-label">{displayLabel}</span>
-          <span className="bar-counter">{counter}</span>
+          <span className="bar-label">{bar.label}</span>
+          <span className="bar-counter">{bar.valueText}</span>
         </div>
       </div>
     </div>
@@ -2268,12 +2278,22 @@ type GroupPanelProps = {
 }
 
 type GroupMember = {
-  name?: string
+  nameText: string
+  isNameMissing: boolean
   isLeader: boolean
-  health?: string
-  healthMax?: string
-  move?: string
-  moveMax?: string
+  leaderText?: string
+  statusText?: string
+  resources: GroupResource[]
+  rawText?: string
+  unknownFieldsText?: string
+}
+
+type GroupResource = {
+  id: 'health' | 'movement'
+  label: string
+  valueText: string
+  percentage: number
+  availabilityKind: 'present' | 'empty'
 }
 
 function GroupPanel({ value }: GroupPanelProps) {
@@ -2284,31 +2304,64 @@ function GroupPanel({ value }: GroupPanelProps) {
   }
 
   return (
-    <div className="tab-inline-output">
-      {members.map((member, index) => {
-        const healthText =
-          member.health !== undefined && member.healthMax !== undefined
-            ? `Health ${member.health}/${member.healthMax}`
-            : null
-        const moveText =
-          member.move !== undefined && member.moveMax !== undefined
-            ? `Move ${member.move}/${member.moveMax}`
-            : null
+    <div className="group-panel" role="list" aria-label="Group members">
+      {members.map((member, index) => (
+        <GroupMemberRow key={`${member.nameText || 'member'}-${index}`} member={member} />
+      ))}
+    </div>
+  )
+}
 
-        return (
-          <div key={`${member.name ?? 'member'}-${index}`} className="group-member">
-            <div>
-              {member.name ?? 'Unknown'}
-              {member.isLeader ? ' (Leader)' : ''}
-            </div>
-            {healthText || moveText ? (
-              <div>
-                {[healthText, moveText].filter(Boolean).join(' ')}
-              </div>
-            ) : null}
-          </div>
-        )
-      })}
+function GroupMemberRow({ member }: { member: GroupMember }) {
+  const className = [
+    'group-member',
+    member.isNameMissing ? 'group-member-missing-name' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <article className={className} role="listitem">
+      <div className="group-member-header">
+        <span className="group-member-name">{member.nameText}</span>
+        {member.leaderText ? <span className="group-leader-badge">{member.leaderText}</span> : null}
+      </div>
+
+      {member.statusText ? (
+        <div className="group-status-line">
+          <span>Status</span>
+          <strong>{member.statusText}</strong>
+        </div>
+      ) : null}
+
+      {member.rawText ? <p className="group-raw-text">{member.rawText}</p> : null}
+
+      {member.resources.length > 0 ? (
+        <div className="group-resources">
+          {member.resources.map((resource) => (
+            <GroupResourceView key={resource.id} resource={resource} />
+          ))}
+        </div>
+      ) : null}
+
+      {member.unknownFieldsText ? <p className="group-unknown-fields">Other: {member.unknownFieldsText}</p> : null}
+    </article>
+  )
+}
+
+function GroupResourceView({ resource }: { resource: GroupResource }) {
+  return (
+    <div
+      className={`group-resource group-resource-${resource.id} group-resource-${resource.availabilityKind}`}
+      aria-label={`${resource.label} ${resource.valueText}`}
+    >
+      <div className="group-resource-header">
+        <span>{resource.label}</span>
+        <strong>{resource.valueText}</strong>
+      </div>
+      <div className="group-resource-track" aria-hidden="true">
+        <span style={{ width: `${resource.percentage}%` }} />
+      </div>
     </div>
   )
 }
@@ -2379,13 +2432,178 @@ function parseGroupMembers(value: MudValue): GroupMember[] {
       const move = asOptionalText(readAnyKey(entry, ['move', 'MOVE', 'movement', 'MOVEMENT']))
       const moveMax = asOptionalText(readAnyKey(entry, ['move_max', 'MOVE_MAX', 'movement_max', 'MOVEMENT_MAX']))
       const isLeader = asOptionalBoolean(readAnyKey(entry, ['is_leader', 'IS_LEADER', 'leader', 'LEADER'])) ?? false
+      const statusText = asOptionalText(readAnyKey(entry, ['status', 'STATUS', 'position', 'POSITION', 'state', 'STATE']))
+      const rawText = asOptionalText(readAnyKey(entry, ['raw', 'RAW', 'raw_text', 'RAW_TEXT']))
+      const unknownFieldsText = formatUnknownGroupFields(entry)
+      const resources = [
+        buildGroupResource('health', 'Health', health, healthMax),
+        buildGroupResource('movement', 'Move', move, moveMax),
+      ].filter((resource): resource is GroupResource => resource !== null)
 
-      if (!name && !health && !healthMax && !move && !moveMax) {
+      if (!name && !statusText && !rawText && resources.length === 0 && !unknownFieldsText) {
         return []
       }
 
-      return [{ name, isLeader, health, healthMax, move, moveMax }]
+      return [
+        {
+          nameText: name ?? 'Unknown',
+          isNameMissing: !name,
+          isLeader,
+          leaderText: isLeader ? 'Leader' : undefined,
+          statusText,
+          resources,
+          rawText,
+          unknownFieldsText,
+        },
+      ]
     })
+}
+
+function buildHudBar({
+  id,
+  status,
+  label,
+  value,
+  max,
+  accentClass,
+}: {
+  id: string
+  status: ConnectionStatus
+  label: string
+  value?: number
+  max?: number
+  accentClass: string
+}): BarConfig {
+  const hasValue = value !== undefined && max !== undefined
+  const safeMax = max && max > 0 ? max : 0
+  const percentage = hasValue && safeMax > 0 ? Math.min(Math.max((value / safeMax) * 100, 0), 100) : 0
+  const availabilityKind = getHudBarAvailabilityKind(status, hasValue)
+  const valueText = hasValue ? `${formatNumber(value)} / ${formatNumber(max)}` : getHudBarFallbackText(availabilityKind)
+  const ariaLabel = `${label} ${valueText}`
+
+  return {
+    id,
+    label,
+    valueText,
+    percentage,
+    ariaLabel,
+    availabilityKind,
+    accentClass,
+  }
+}
+
+function getHudBarAvailabilityKind(
+  status: ConnectionStatus,
+  hasValue: boolean,
+): BarConfig['availabilityKind'] {
+  if (status === 'error') {
+    return 'error'
+  }
+
+  if (status === 'connected') {
+    return hasValue ? 'present' : 'unavailable'
+  }
+
+  if (status === 'connecting') {
+    return 'loading'
+  }
+
+  return 'offline'
+}
+
+function getHudBarFallbackText(kind: BarConfig['availabilityKind']) {
+  switch (kind) {
+    case 'error':
+      return 'Error'
+    case 'loading':
+      return 'Loading'
+    case 'offline':
+      return 'Offline'
+    case 'unavailable':
+      return 'Waiting'
+    case 'present':
+      return 'Waiting'
+    default:
+      return 'Waiting'
+  }
+}
+
+function buildGroupResource(
+  id: GroupResource['id'],
+  label: string,
+  value?: string,
+  max?: string,
+): GroupResource | null {
+  if (!value && !max) {
+    return null
+  }
+
+  const numericValue = parseNumericMudText(value)
+  const numericMax = parseNumericMudText(max)
+  const percentage =
+    numericValue !== undefined && numericMax !== undefined && numericMax > 0
+      ? Math.min(Math.max((numericValue / numericMax) * 100, 0), 100)
+      : 0
+
+  return {
+    id,
+    label,
+    valueText: value && max ? `${value}/${max}` : value || max || 'Unknown',
+    percentage,
+    availabilityKind: value && max ? 'present' : 'empty',
+  }
+}
+
+function formatUnknownGroupFields(record: Record<string, MudValue>) {
+  const ignoredKeys = new Set([
+    'name',
+    'NAME',
+    'member_name',
+    'MEMBER_NAME',
+    'character_name',
+    'CHARACTER_NAME',
+    'health',
+    'HEALTH',
+    'health_max',
+    'HEALTH_MAX',
+    'max_health',
+    'MAX_HEALTH',
+    'move',
+    'MOVE',
+    'movement',
+    'MOVEMENT',
+    'move_max',
+    'MOVE_MAX',
+    'movement_max',
+    'MOVEMENT_MAX',
+    'is_leader',
+    'IS_LEADER',
+    'leader',
+    'LEADER',
+    'status',
+    'STATUS',
+    'position',
+    'POSITION',
+    'state',
+    'STATE',
+    'raw',
+    'RAW',
+    'raw_text',
+    'RAW_TEXT',
+  ])
+
+  const entries = Object.entries(record)
+    .map(([key, entryValue]) => {
+      if (ignoredKeys.has(key)) {
+        return null
+      }
+
+      const formattedValue = formatMudValueAsText(entryValue)
+      return formattedValue ? `${formatMudLabel(key)}: ${formattedValue}` : null
+    })
+    .filter((entry): entry is string => Boolean(entry))
+
+  return entries.length > 0 ? entries.join(' | ') : undefined
 }
 
 function renderQuestNode(value: MudValue): ReactNode {
@@ -2663,6 +2881,15 @@ function asOptionalBoolean(value: MudValue | undefined): boolean | undefined {
   return undefined
 }
 
+function parseNumericMudText(value?: string) {
+  if (!value) {
+    return undefined
+  }
+
+  const parsed = Number.parseFloat(value.replace(/,/g, '').trim())
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 function formatMudLabel(value: string) {
   return value
     .replace(/_/g, ' ')
@@ -2727,6 +2954,10 @@ function getExperienceProgress(mudState: MudState) {
   }
 
   return Math.max(mudState.experienceMax - mudState.experienceTnl, 0)
+}
+
+function hasCombatGaugeData(mudState: MudState) {
+  return typeof mudState.opponentHealth === 'number' && mudState.opponentHealth > 0
 }
 
 function buildMapOutput(mudState: MudState) {
