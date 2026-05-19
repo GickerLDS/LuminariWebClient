@@ -9,6 +9,7 @@ import type { RawData } from 'ws'
 import { appSettings } from '../shared/app-settings.ts'
 import {
   defaultMsdpVariables,
+  isWildernessRoomVnum,
   isMovementCommandInput,
   normalizeMsdpVariableMap,
 } from '../shared/mud.ts'
@@ -57,7 +58,7 @@ const CONTROL_BYTES = new Set([
   MSDP_ARRAY_OPEN,
   MSDP_ARRAY_CLOSE,
 ])
-const REQUIRED_MSDP_VARIABLES = ['ROOM', 'ROOM_VNUM', 'MINIMAP', 'AUTOMAP', 'GRAPHIC_MAP']
+const REQUIRED_MSDP_VARIABLES = ['ROOM', 'ROOM_VNUM', 'MINIMAP', 'AUTOMAP', 'GRAPHIC_MAP', 'WILDERNESS_GRAPHIC_MAP']
 const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
@@ -297,6 +298,7 @@ class MudSession {
 
     const mapVariables = new Set([
       this.msdpVariables.graphicMap.trim(),
+      this.msdpVariables.wildernessGraphicMap.trim(),
       this.msdpVariables.minimap.trim(),
     ])
 
@@ -329,16 +331,31 @@ class MudSession {
   }
 
   private withLocalGraphicMapUpdate(partial: Partial<MudState>) {
-    if (partial.graphicMap || partial.roomVnum === undefined || !this.state.graphicMap) {
+    if (partial.roomVnum === undefined) {
       return partial
     }
 
-    const graphicMap = recenterGraphicMapData(this.state.graphicMap, partial.roomVnum)
-    if (!graphicMap) {
-      return partial
+    const nextPartial = { ...partial }
+
+    if (!isWildernessRoomVnum(partial.roomVnum) && !partial.graphicMap && this.state.graphicMap) {
+      const graphicMap = recenterGraphicMapData(this.state.graphicMap, partial.roomVnum)
+      if (graphicMap) {
+        nextPartial.graphicMap = graphicMap
+      }
     }
 
-    return { ...partial, graphicMap }
+    if (
+      isWildernessRoomVnum(partial.roomVnum) &&
+      !partial.wildernessGraphicMap &&
+      this.state.wildernessGraphicMap
+    ) {
+      const wildernessGraphicMap = recenterGraphicMapData(this.state.wildernessGraphicMap, partial.roomVnum)
+      if (wildernessGraphicMap) {
+        nextPartial.wildernessGraphicMap = wildernessGraphicMap
+      }
+    }
+
+    return nextPartial
   }
 
   private send(message: ServerMessage) {
@@ -727,9 +744,13 @@ function normalizeScalar(value: string): MudValue {
 
 function getConfiguredMsdpVariables(msdpVariables: MsdpVariableMap) {
   const variables = new Set(Object.values(msdpVariables).map((value) => value.trim()).filter(Boolean))
-  const graphicMapVariable = msdpVariables.graphicMap.trim()
+  const graphicMapVariables = [msdpVariables.graphicMap.trim(), msdpVariables.wildernessGraphicMap.trim()]
 
-  if (graphicMapVariable) {
+  for (const graphicMapVariable of graphicMapVariables) {
+    if (!graphicMapVariable) {
+      continue
+    }
+
     variables.add(graphicMapVariable.toUpperCase())
     variables.add(graphicMapVariable.toLowerCase())
   }
@@ -861,6 +882,9 @@ function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVar
       break
     case 'graphicMap':
       partial.graphicMap = toGraphicMapData(value)
+      break
+    case 'wildernessGraphicMap':
+      partial.wildernessGraphicMap = toGraphicMapData(value)
       break
     case 'affects':
       partial.affects = value

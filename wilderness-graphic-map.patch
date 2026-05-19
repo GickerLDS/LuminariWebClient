@@ -1,0 +1,185 @@
+diff --git a/server/index.ts b/server/index.ts
+index e7ad98c..cc86e5c 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -9,6 +9,7 @@ import type { RawData } from 'ws'
+ import { appSettings } from '../shared/app-settings.ts'
+ import {
+   defaultMsdpVariables,
++  isWildernessRoomVnum,
+   isMovementCommandInput,
+   normalizeMsdpVariableMap,
+ } from '../shared/mud.ts'
+@@ -57,7 +58,7 @@ const CONTROL_BYTES = new Set([
+   MSDP_ARRAY_OPEN,
+   MSDP_ARRAY_CLOSE,
+ ])
+-const REQUIRED_MSDP_VARIABLES = ['ROOM', 'ROOM_VNUM', 'MINIMAP', 'AUTOMAP', 'GRAPHIC_MAP']
++const REQUIRED_MSDP_VARIABLES = ['ROOM', 'ROOM_VNUM', 'MINIMAP', 'AUTOMAP', 'GRAPHIC_MAP', 'WILDERNESS_GRAPHIC_MAP']
+ const app = express()
+ const server = createServer(app)
+ const wss = new WebSocketServer({ server, path: '/ws' })
+@@ -297,6 +298,7 @@ class MudSession {
+ 
+     const mapVariables = new Set([
+       this.msdpVariables.graphicMap.trim(),
++      this.msdpVariables.wildernessGraphicMap.trim(),
+       this.msdpVariables.minimap.trim(),
+     ])
+ 
+@@ -329,16 +331,31 @@ class MudSession {
+   }
+ 
+   private withLocalGraphicMapUpdate(partial: Partial<MudState>) {
+-    if (partial.graphicMap || partial.roomVnum === undefined || !this.state.graphicMap) {
++    if (partial.roomVnum === undefined) {
+       return partial
+     }
+ 
+-    const graphicMap = recenterGraphicMapData(this.state.graphicMap, partial.roomVnum)
+-    if (!graphicMap) {
+-      return partial
++    const nextPartial = { ...partial }
++
++    if (!isWildernessRoomVnum(partial.roomVnum) && !partial.graphicMap && this.state.graphicMap) {
++      const graphicMap = recenterGraphicMapData(this.state.graphicMap, partial.roomVnum)
++      if (graphicMap) {
++        nextPartial.graphicMap = graphicMap
++      }
++    }
++
++    if (
++      isWildernessRoomVnum(partial.roomVnum) &&
++      !partial.wildernessGraphicMap &&
++      this.state.wildernessGraphicMap
++    ) {
++      const wildernessGraphicMap = recenterGraphicMapData(this.state.wildernessGraphicMap, partial.roomVnum)
++      if (wildernessGraphicMap) {
++        nextPartial.wildernessGraphicMap = wildernessGraphicMap
++      }
+     }
+ 
+-    return { ...partial, graphicMap }
++    return nextPartial
+   }
+ 
+   private send(message: ServerMessage) {
+@@ -727,9 +744,13 @@ function normalizeScalar(value: string): MudValue {
+ 
+ function getConfiguredMsdpVariables(msdpVariables: MsdpVariableMap) {
+   const variables = new Set(Object.values(msdpVariables).map((value) => value.trim()).filter(Boolean))
+-  const graphicMapVariable = msdpVariables.graphicMap.trim()
++  const graphicMapVariables = [msdpVariables.graphicMap.trim(), msdpVariables.wildernessGraphicMap.trim()]
++
++  for (const graphicMapVariable of graphicMapVariables) {
++    if (!graphicMapVariable) {
++      continue
++    }
+ 
+-  if (graphicMapVariable) {
+     variables.add(graphicMapVariable.toUpperCase())
+     variables.add(graphicMapVariable.toLowerCase())
+   }
+@@ -862,6 +883,9 @@ function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVar
+     case 'graphicMap':
+       partial.graphicMap = toGraphicMapData(value)
+       break
++    case 'wildernessGraphicMap':
++      partial.wildernessGraphicMap = toGraphicMapData(value)
++      break
+     case 'affects':
+       partial.affects = value
+       break
+diff --git a/shared/mud.ts b/shared/mud.ts
+index ed210cc..cdb9452 100644
+--- a/shared/mud.ts
++++ b/shared/mud.ts
+@@ -26,6 +26,18 @@ export type GraphicMapData = {
+   rooms?: GraphicMapRoom[]
+ }
+ 
++export const WILDERNESS_ROOM_VNUM_START = 1000000
++export const WILDERNESS_ROOM_VNUM_END = 1009999
++
++export function isWildernessRoomVnum(roomVnum?: number) {
++  return (
++    typeof roomVnum === 'number' &&
++    Number.isFinite(roomVnum) &&
++    roomVnum >= WILDERNESS_ROOM_VNUM_START &&
++    roomVnum <= WILDERNESS_ROOM_VNUM_END
++  )
++}
++
+ export interface MudState {
+   characterName?: string
+   title?: string
+@@ -75,11 +87,12 @@ export interface MudState {
+   automap?: string
+   minimap?: string
+   graphicMap?: GraphicMapData
++  wildernessGraphicMap?: GraphicMapData
+   worldTime?: string
+   actions?: MudValue
+   affects?: MudValue
+   group?: MudValue
+-    questInfo?: MudValue
++  questInfo?: MudValue
+   opponentName?: string
+   opponentHealth?: number
+   opponentHealthMax?: number
+@@ -121,6 +134,7 @@ export const defaultMsdpVariables = {
+   money: 'MONEY',
+   minimap: 'MINIMAP',
+   graphicMap: 'GRAPHIC_MAP',
++  wildernessGraphicMap: 'WILDERNESS_GRAPHIC_MAP',
+   affects: 'AFFECTS',
+   group: 'GROUP',
+   questInfo: 'QUEST_INFO',
+@@ -201,6 +215,10 @@ export function normalizeMsdpVariableMap(value: unknown): MsdpVariableMap {
+     money: normalizeMsdpVariableValue(raw.money, defaultMsdpVariables.money),
+     minimap: normalizeMsdpVariableValue(raw.minimap, defaultMsdpVariables.minimap),
+     graphicMap: normalizeMsdpVariableValue(raw.graphicMap, defaultMsdpVariables.graphicMap),
++    wildernessGraphicMap: normalizeMsdpVariableValue(
++      raw.wildernessGraphicMap,
++      defaultMsdpVariables.wildernessGraphicMap,
++    ),
+     affects: normalizeMsdpVariableValue(raw.affects, defaultMsdpVariables.affects),
+     group: normalizeMsdpVariableValue(raw.group, defaultMsdpVariables.group),
+     questInfo: normalizeMsdpVariableValue(raw.questInfo, defaultMsdpVariables.questInfo),
+diff --git a/src/App.tsx b/src/App.tsx
+index b3316ee..5a3186f 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -6,6 +6,7 @@ import { appSettings } from '../shared/app-settings.ts'
+ import type { AppSettings } from '../shared/app-settings.ts'
+ import {
+   defaultMsdpVariables,
++  isWildernessRoomVnum,
+   isMovementCommandInput,
+   normalizeMsdpVariableMap,
+ } from '../shared/mud.ts'
+@@ -265,6 +266,7 @@ const MSDP_VARIABLE_GROUPS: Array<{
+     fields: [
+       { key: 'minimap', label: 'Minimap' },
+       { key: 'graphicMap', label: 'Graphic map' },
++      { key: 'wildernessGraphicMap', label: 'Wilderness graphic map' },
+       { key: 'affects', label: 'Affects' },
+       { key: 'group', label: 'Group' },
+       { key: 'questInfo', label: 'Quest info' },
+@@ -714,7 +716,15 @@ function App() {
+   )
+ 
+   const asciiMapOutput = useMemo(() => buildAsciiMapOutput(mudState.minimap), [mudState.minimap])
+-  const graphicMap = useMemo(() => buildGraphicMap(mudState.graphicMap, mudState.minimap), [mudState.graphicMap, mudState.minimap])
++  const isWildernessRoom = useMemo(() => isWildernessRoomVnum(mudState.roomVnum), [mudState.roomVnum])
++  const activeGraphicMapData = useMemo(
++    () => (isWildernessRoom ? mudState.wildernessGraphicMap : mudState.graphicMap),
++    [isWildernessRoom, mudState.graphicMap, mudState.wildernessGraphicMap],
++  )
++  const graphicMap = useMemo(
++    () => buildGraphicMap(activeGraphicMapData, isWildernessRoom ? undefined : mudState.minimap),
++    [activeGraphicMapData, isWildernessRoom, mudState.minimap],
++  )
+   const activeMapPanel = useMemo(
+     () => MAP_PANEL_TABS.find((tab) => tab.id === activeMapTab) ?? MAP_PANEL_TABS[0],
+     [activeMapTab],

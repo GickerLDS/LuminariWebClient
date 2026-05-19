@@ -6,6 +6,7 @@ import { appSettings } from '../shared/app-settings.ts'
 import type { AppSettings } from '../shared/app-settings.ts'
 import {
   defaultMsdpVariables,
+  isWildernessRoomVnum,
   isMovementCommandInput,
   normalizeMsdpVariableMap,
 } from '../shared/mud.ts'
@@ -268,6 +269,7 @@ const MSDP_VARIABLE_GROUPS: Array<{
     fields: [
       { key: 'minimap', label: 'Minimap' },
       { key: 'graphicMap', label: 'Graphic map' },
+      { key: 'wildernessGraphicMap', label: 'Wilderness graphic map' },
       { key: 'affects', label: 'Affects' },
       { key: 'group', label: 'Group' },
       { key: 'questInfo', label: 'Quest info' },
@@ -715,7 +717,15 @@ function App() {
   )
 
   const asciiMapOutput = useMemo(() => buildAsciiMapOutput(mudState.minimap), [mudState.minimap])
-  const graphicMap = useMemo(() => buildGraphicMap(mudState.graphicMap, mudState.minimap), [mudState.graphicMap, mudState.minimap])
+  const isWildernessRoom = useMemo(() => isWildernessRoomVnum(mudState.roomVnum), [mudState.roomVnum])
+  const activeGraphicMapData = useMemo(
+    () => (isWildernessRoom ? mudState.wildernessGraphicMap : mudState.graphicMap),
+    [isWildernessRoom, mudState.graphicMap, mudState.wildernessGraphicMap],
+  )
+  const graphicMap = useMemo(
+    () => buildGraphicMap(activeGraphicMapData, isWildernessRoom ? undefined : mudState.minimap),
+    [activeGraphicMapData, isWildernessRoom, mudState.minimap],
+  )
   const activeMapPanel = useMemo(
     () => MAP_PANEL_TABS.find((tab) => tab.id === activeMapTab) ?? MAP_PANEL_TABS[0],
     [activeMapTab],
