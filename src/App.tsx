@@ -11,6 +11,8 @@ import {
 import type {
   ClientMessage,
   ConnectionStatus,
+  GraphicMapData,
+  GraphicMapRoom,
   MsdpVariableKey,
   MsdpVariableMap,
   MudState,
@@ -33,9 +35,12 @@ const TRIGGERS_COOKIE_NAME = 'lwc.triggers'
 const CLIENT_SETTINGS_COOKIE_NAME = 'lwc.settings'
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, 'g')
 const LUMINARI_COLOR_CHAR = '^'
+const KRYNN_COLOR_CHAR = '\t'
 const LUMINARI_COLOR_CODES: Record<string, string> = {
   n: '\u001b[0;00m',
+  k: luminariRgbToAnsi('F000'),
   d: luminariRgbToAnsi('F000'),
+  K: luminariRgbToAnsi('F111'),
   D: luminariRgbToAnsi('F111'),
   '1': luminariRgbToAnsi('F022'),
   '2': luminariRgbToAnsi('F055'),
@@ -128,9 +133,27 @@ type BarConfig = {
 
 type SidebarTabId = 'character' | 'quests' | 'group' | 'affects'
 
+type MapPanelTabId = 'graphic' | 'graphicLegend' | 'ascii' | 'asciiLegend'
+
+type DefaultMapType = 'graphic' | 'ascii'
+
 type SidebarTab = {
   id: SidebarTabId
   label: string
+}
+
+type MapPanelTab = {
+  id: MapPanelTabId
+  label: string
+  panelLabel: string
+}
+
+type MapLegendItem = {
+  id: string
+  label: string
+  detail: string
+  sample?: string
+  sector?: number
 }
 
 type AliasDefinition = {
@@ -159,6 +182,7 @@ type ClientSettings = {
   minimap: {
     fontSize: number
     paneHeight: number
+    defaultMapType: DefaultMapType
   }
   sidebar: {
     fontFamily: SidebarFontFamily
@@ -184,6 +208,7 @@ const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
   minimap: {
     fontSize: 14,
     paneHeight: 16,
+    defaultMapType: 'graphic',
   },
   sidebar: {
     fontFamily: 'mono',
@@ -202,6 +227,10 @@ const SIDEBAR_FONT_OPTIONS: Array<{ value: SidebarFontFamily; label: string }> =
   { value: 'sans', label: 'Sans serif' },
   { value: 'mono', label: 'Monospace' },
   { value: 'serif', label: 'Serif' },
+]
+const DEFAULT_MAP_TYPE_OPTIONS: Array<{ value: DefaultMapType; label: string }> = [
+  { value: 'graphic', label: 'Graphical' },
+  { value: 'ascii', label: 'ASCII' },
 ]
 const SIDEBAR_FONT_FAMILIES: Record<SidebarFontFamily, string> = {
   sans: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -258,6 +287,7 @@ const MSDP_VARIABLE_GROUPS: Array<{
     description: 'Variables that populate the minimap, quest, group, and affects panels.',
     fields: [
       { key: 'minimap', label: 'Minimap' },
+      { key: 'graphicMap', label: 'Graphic map' },
       { key: 'affects', label: 'Affects' },
       { key: 'group', label: 'Group' },
       { key: 'questInfo', label: 'Quest info' },
@@ -282,6 +312,83 @@ const SIDEBAR_TABS: SidebarTab[] = [
   { id: 'quests', label: 'Quests' },
   { id: 'group', label: 'Group' },
   { id: 'affects', label: 'Affects' },
+]
+
+const MAP_PANEL_TABS: MapPanelTab[] = [
+  { id: 'graphic', label: 'Graphic', panelLabel: 'Graphic map' },
+  { id: 'graphicLegend', label: 'Legend', panelLabel: 'Graphic map legend' },
+  { id: 'ascii', label: 'ASCII', panelLabel: 'ASCII map' },
+  { id: 'asciiLegend', label: 'Legend', panelLabel: 'ASCII map legend' },
+]
+
+const GRAPHIC_MAP_LEGEND_ITEMS: MapLegendItem[] = [
+  { id: 'inside', sector: 0, label: 'Inside', detail: 'Standard indoor room sector.', sample: '\\tn.\\tn' },
+  { id: 'city', sector: 1, label: 'City', detail: 'City streets and plazas.', sample: '\\twC\\tn' },
+  { id: 'field', sector: 2, label: 'Field', detail: 'Open plains and fields.', sample: '\\tg,\\tn' },
+  { id: 'forest', sector: 3, label: 'Forest', detail: 'Wooded terrain.', sample: '\\tG\\t=Y\\tn' },
+  { id: 'hills', sector: 4, label: 'Hills', detail: 'Rolling hills.', sample: '\\ty^\\tn' },
+  { id: 'mountain', sector: 5, label: 'Mountain', detail: 'Mountain terrain.', sample: '\\trm\\tn' },
+  { id: 'water-swim', sector: 6, label: 'Water', detail: 'Swimmable water.', sample: '\\tc\\t=~\\tn' },
+  { id: 'water-noswim', sector: 7, label: 'Deep water', detail: 'Water that cannot be crossed normally.', sample: '\\tb\\t==\\tn' },
+  { id: 'flying', sector: 8, label: 'Air', detail: 'Open air or flying terrain.', sample: '\\tC^\\tn' },
+  { id: 'underwater', sector: 9, label: 'Underwater', detail: 'Submerged rooms.', sample: '\\tbU\\tn' },
+  { id: 'roads', sector: 11, label: 'Road', detail: 'Road segments and intersections.', sample: '\\tD+\\tn' },
+  { id: 'desert', sector: 14, label: 'Desert', detail: 'Dry desert terrain.', sample: '\\tY.\\tn' },
+  { id: 'ocean', sector: 15, label: 'Ocean', detail: 'Open ocean water.', sample: '\\tB\\t=o\\tn' },
+  { id: 'marsh', sector: 16, label: 'Marsh', detail: 'Wetlands and bogs.', sample: '\\tM,\\tn' },
+  { id: 'high-mountain', sector: 17, label: 'High mountain', detail: 'High, difficult peaks.', sample: '\\tRM\\tn' },
+  { id: 'planes', sector: 18, label: 'Planes', detail: 'Extraplanar terrain.', sample: '\\tM.\\tn' },
+  { id: 'underdark', sector: 19, label: 'Underdark wilds', detail: 'Underground wilderness.', sample: '\\tM\\t=Y\\tn' },
+  { id: 'ud-city', sector: 20, label: 'Underdark city', detail: 'Underground settlements.', sample: '\\tmC\\tn' },
+  { id: 'ud-inside', sector: 21, label: 'Underdark inside', detail: 'Underground interior rooms.', sample: '\\tm.\\tn' },
+  { id: 'ud-water', sector: 22, label: 'Underdark water', detail: 'Underground swimmable water.', sample: '\\tm\\t=~\\tn' },
+  { id: 'lava', sector: 25, label: 'Lava', detail: 'Hazardous lava terrain.', sample: '\\tR.\\tn' },
+  { id: 'cave', sector: 29, label: 'Cave', detail: 'Natural cave rooms.', sample: '\\tMC\\tn' },
+  { id: 'jungle', sector: 30, label: 'Jungle', detail: 'Dense jungle terrain.', sample: '\\tg&\\tn' },
+  { id: 'tundra', sector: 31, label: 'Tundra', detail: 'Frozen plains.', sample: '\\tW.\\tn' },
+  { id: 'taiga', sector: 32, label: 'Taiga', detail: 'Cold evergreen forest.', sample: '\\tgA\\tn' },
+  { id: 'beach', sector: 33, label: 'Beach', detail: 'Coastal shorelines.', sample: '\\ty:\\tn' },
+  { id: 'seaport', sector: 34, label: 'Seaport', detail: 'Harbor or port room.', sample: '\\tRS\\tn' },
+  { id: 'inside-room', sector: 35, label: 'Inside room', detail: 'Special indoor-room sector.', sample: '\\ty*\\tn' },
+  { id: 'river', sector: 36, label: 'River', detail: 'Flowing river water.', sample: '\\tc\\t=~\\tn' },
+]
+
+const GRAPHIC_MAP_SPECIAL_LEGEND_ITEMS: MapLegendItem[] = [
+  { id: 'marker-up', label: 'Up exit', detail: 'Visible upward exit from the room.', sample: '↑' },
+  { id: 'marker-down', label: 'Down exit', detail: 'Visible downward exit from the room.', sample: '↓' },
+  { id: 'marker-in', label: 'Inside exit', detail: 'Visible inside exit.', sample: '🚪↘' },
+  { id: 'marker-out', label: 'Outside exit', detail: 'Visible outside exit.', sample: '🚪↗' },
+]
+
+const ASCII_MAP_LEGEND_ITEMS: MapLegendItem[] = [
+  { id: 'ascii-player', label: 'Player', detail: 'Current room marker from asciimap.c (SECT_HERE).', sample: '\\tW&\\tn' },
+  { id: 'ascii-strange', label: 'Strange link', detail: 'One-way or unusual connection.', sample: '\\tR?\\tn' },
+  { id: 'ascii-door-ns', label: 'North-south exit', detail: 'Compact door glyph for N/S exits.', sample: '|' },
+  { id: 'ascii-door-ew', label: 'East-west exit', detail: 'Compact door glyph for E/W exits.', sample: '-' },
+  { id: 'ascii-door-ne', label: 'Diagonal exit', detail: 'Compact diagonal exit glyph.', sample: '/' },
+  { id: 'ascii-door-nw', label: 'Diagonal exit', detail: 'Compact diagonal exit glyph.', sample: '\\\\' },
+  { id: 'ascii-door-up', label: 'Up exit', detail: 'Compact upward exit glyph.', sample: '\\tr+\\tn' },
+  { id: 'ascii-door-down', label: 'Down exit', detail: 'Compact downward exit glyph.', sample: '\\tr-\\tn' },
+  { id: 'ascii-inside', label: 'Inside', detail: 'Standard indoor room.', sample: '\\tn.\\tn' },
+  { id: 'ascii-city', label: 'City', detail: 'City streets and plazas.', sample: '\\twC\\tn' },
+  { id: 'ascii-field', label: 'Field', detail: 'Plains and fields.', sample: '\\tg,\\tn' },
+  { id: 'ascii-forest', label: 'Forest', detail: 'Wooded terrain.', sample: '\\tG\\t=Y\\tn' },
+  { id: 'ascii-hills', label: 'Hills', detail: 'Rolling hills.', sample: '\\ty^\\tn' },
+  { id: 'ascii-mountain', label: 'Mountain', detail: 'Mountain terrain.', sample: '\\trm\\tn' },
+  { id: 'ascii-water', label: 'Water', detail: 'Swimmable water.', sample: '\\tc\\t=~\\tn' },
+  { id: 'ascii-water-deep', label: 'Deep water', detail: 'No-swim water.', sample: '\\tb\\t==\\tn' },
+  { id: 'ascii-underwater', label: 'Underwater', detail: 'Underwater room.', sample: '\\tbU\\tn' },
+  { id: 'ascii-road', label: 'Road', detail: 'Roads and intersections.', sample: '\\tD+\\tn' },
+  { id: 'ascii-desert', label: 'Desert', detail: 'Dry desert terrain.', sample: '\\tY.\\tn' },
+  { id: 'ascii-ocean', label: 'Ocean', detail: 'Open ocean.', sample: '\\tB\\t=o\\tn' },
+  { id: 'ascii-marsh', label: 'Marsh', detail: 'Wetlands and marshes.', sample: '\\tM,\\tn' },
+  { id: 'ascii-cave', label: 'Cave', detail: 'Cave terrain.', sample: '\\tMC\\tn' },
+  { id: 'ascii-jungle', label: 'Jungle', detail: 'Jungle terrain.', sample: '\\tg&\\tn' },
+  { id: 'ascii-tundra', label: 'Tundra', detail: 'Frozen plains.', sample: '\\tW.\\tn' },
+  { id: 'ascii-taiga', label: 'Taiga', detail: 'Cold evergreen forest.', sample: '\\tgA\\tn' },
+  { id: 'ascii-beach', label: 'Beach', detail: 'Coastline and shore.', sample: '\\ty:\\tn' },
+  { id: 'ascii-seaport', label: 'Seaport', detail: 'Harbor room.', sample: '\\tRS\\tn' },
+  { id: 'ascii-river', label: 'River', detail: 'River terrain.', sample: '\\tc\\t=~\\tn' },
 ]
 
 function App() {
@@ -309,6 +416,7 @@ function App() {
   const [isHeaderVisible, setIsHeaderVisible] = useState(true)
   const [openAutomationMenu, setOpenAutomationMenu] = useState<AutomationMenuId | null>(null)
   const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTabId>('character')
+  const [activeMapTab, setActiveMapTab] = useState<MapPanelTabId>(() => getDefaultMapPanelTab(loadClientSettingsFromCookies()))
   const socketRef = useRef<WebSocket | null>(null)
   const terminalRef = useRef<HTMLDivElement | null>(null)
   const commandInputRef = useRef<HTMLInputElement | null>(null)
@@ -341,6 +449,10 @@ function App() {
   useEffect(() => {
     saveClientSettingsToCookies(normalizeClientSettings(clientSettings))
   }, [clientSettings])
+
+  useEffect(() => {
+    setActiveMapTab(getDefaultMapPanelTab(clientSettings))
+  }, [clientSettings.minimap.defaultMapType])
 
   useEffect(() => {
     if (!openAutomationMenu) {
@@ -629,7 +741,12 @@ function App() {
     [clientSettings.sidebar.fontFamily, clientSettings.sidebar.fontSize],
   )
 
-  const mapOutput = useMemo(() => buildMapOutput(mudState), [mudState])
+  const asciiMapOutput = useMemo(() => buildAsciiMapOutput(mudState.minimap), [mudState.minimap])
+  const graphicMap = useMemo(() => buildGraphicMap(mudState.graphicMap), [mudState.graphicMap])
+  const activeMapPanel = useMemo(
+    () => MAP_PANEL_TABS.find((tab) => tab.id === activeMapTab) ?? MAP_PANEL_TABS[0],
+    [activeMapTab],
+  )
   const selectedMudPreset = useMemo(
     () => uiSettings.connection.muds.find((mud) => mud.id === selectedMudId),
     [selectedMudId, uiSettings.connection.muds],
@@ -1295,10 +1412,28 @@ function App() {
                     <section className="settings-group">
                       <div className="settings-group-header">
                         <h4>Minimap</h4>
-                        <p>Control the map text size and how tall the map pane stays.</p>
+                        <p>Control the map text size, pane height, and which map view opens by default.</p>
                       </div>
 
                       <div className="settings-fields">
+                        <label>
+                          <span>Default map</span>
+                          <select
+                            value={clientSettings.minimap.defaultMapType}
+                            onChange={(event) => {
+                              if (isDefaultMapType(event.target.value)) {
+                                updateMinimapSettings({ defaultMapType: event.target.value })
+                              }
+                            }}
+                          >
+                            {DEFAULT_MAP_TYPE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
                         <label>
                           <span>Font size</span>
                           <input
@@ -1492,14 +1627,150 @@ function App() {
         </section>
 
         <aside className="sidebar">
-          <section className="panel">
+          <section className="panel map-panel">
             <div className="panel-header">
               <div>
                 <h2>Map</h2>
               </div>
             </div>
 
-            <pre className="minimap" style={minimapStyle} dangerouslySetInnerHTML={{ __html: renderMudHtml(mapOutput) }} />
+            <div className="map-tab-strip" role="tablist" aria-label="Map views">
+              {MAP_PANEL_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeMapTab === tab.id}
+                  className={`map-tab-button${activeMapTab === tab.id ? ' map-tab-button-active' : ''}`}
+                  onClick={() => setActiveMapTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="map-tab-panel" role="tabpanel" aria-label={activeMapPanel.panelLabel}>
+              {activeMapTab === 'graphic' ? (
+                graphicMap ? (
+                  <div className="minimap minimap-graphic" style={minimapStyle}>
+                    <div
+                      className="graphic-map"
+                      style={{
+                        gridTemplateColumns: `repeat(${graphicMap.width}, minmax(0, 1fr))`,
+                        gridTemplateRows: `repeat(${graphicMap.height}, minmax(0, 1fr))`,
+                        aspectRatio: `${graphicMap.width} / ${graphicMap.height}`,
+                        width: '100%',
+                        maxWidth: `${clientSettings.minimap.paneHeight}rem`,
+                        maxHeight: `${clientSettings.minimap.paneHeight}rem`,
+                      }}
+                    >
+                      {graphicMap.cells.map((cell) => (
+                        <div
+                          key={cell.key}
+                          className={[
+                            'graphic-map-cell',
+                            cell.kind === 'room'
+                              ? `graphic-map-tile${cell.isCurrent ? ' graphic-map-tile-current' : ''}`
+                              : cell.kind === 'connector'
+                                ? `graphic-map-connector graphic-map-connector-${cell.orientation}`
+                                : 'graphic-map-empty',
+                          ].join(' ')}
+                          style={cell.color ? { color: cell.color, background: cell.kind === 'room' ? cell.color : undefined } : undefined}
+                          title={cell.title}
+                        >
+                          {cell.kind === 'room' && cell.markers.length > 0 ? (
+                            <div className="graphic-map-markers" aria-hidden="true">
+                              {cell.markers.map((marker) => (
+                                <span key={marker.id} className="graphic-map-marker" title={marker.label}>
+                                  {marker.icon}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="minimap" style={minimapStyle}>
+                    Waiting for GRAPHIC_MAP MSDP data.
+                  </div>
+                )
+              ) : activeMapTab === 'graphicLegend' ? (
+                <div className="map-legend-pane" style={minimapStyle}>
+                  <section className="map-legend-section">
+                    <p className="map-legend-note">
+                      Sector names cross-reference Krynn&apos;s ASCII map tables; swatches match this client&apos;s graphic-map colors.
+                    </p>
+                    <div className="map-legend-grid">
+                      {GRAPHIC_MAP_LEGEND_ITEMS.map((item) => (
+                        <div key={item.id} className="map-legend-item">
+                          <span
+                            className="map-legend-swatch"
+                            style={{ background: getGraphicMapSectorColor(item.sector ?? 0, false) }}
+                            aria-hidden="true"
+                          />
+                          <div className="map-legend-copy">
+                            <strong>{item.label}</strong>
+                            <span>{item.detail}</span>
+                            {item.sample ? (
+                              <span
+                                className="map-legend-sample"
+                                dangerouslySetInnerHTML={{ __html: renderMudHtml(item.sample) }}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="map-legend-section">
+                    <h3>Special exits</h3>
+                    <p className="map-legend-note">
+                      `GRAPHIC_MAP.sp` markers from Krynn&apos;s `build_graphic_map_specials()` output.
+                    </p>
+                    <div className="map-legend-grid map-legend-grid-compact">
+                      {GRAPHIC_MAP_SPECIAL_LEGEND_ITEMS.map((item) => (
+                        <div key={item.id} className="map-legend-item">
+                          <span className="map-legend-symbol map-legend-symbol-large" aria-hidden="true">
+                            {item.sample}
+                          </span>
+                          <div className="map-legend-copy">
+                            <strong>{item.label}</strong>
+                            <span>{item.detail}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              ) : activeMapTab === 'ascii' ? (
+                <pre className="minimap map-ascii-pane" style={minimapStyle} dangerouslySetInnerHTML={{ __html: renderMudHtml(asciiMapOutput) }} />
+              ) : (
+                <div className="map-legend-pane" style={minimapStyle}>
+                  <section className="map-legend-section">
+                    <p className="map-legend-note">
+                      Character samples cross-reference Krynn&apos;s `compact_door_info[]` and compact `map_info[]` entries in `asciimap.c`.
+                    </p>
+                    <div className="map-legend-grid map-legend-grid-ascii">
+                      {ASCII_MAP_LEGEND_ITEMS.map((item) => (
+                        <div key={item.id} className="map-legend-item">
+                          <span
+                            className="map-legend-symbol"
+                            dangerouslySetInnerHTML={{ __html: renderMudHtml(item.sample ?? '') }}
+                          />
+                          <div className="map-legend-copy">
+                            <strong>{item.label}</strong>
+                            <span>{item.detail}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="panel tabbed-panel">
@@ -1947,6 +2218,9 @@ function normalizeClientSettings(value: unknown, emptyStateMessage?: string): Cl
           : DEFAULT_CLIENT_SETTINGS.terminal.wrapLines,
     },
     minimap: {
+      defaultMapType: isDefaultMapType(minimapRecord?.defaultMapType)
+        ? minimapRecord.defaultMapType
+        : DEFAULT_CLIENT_SETTINGS.minimap.defaultMapType,
       fontSize: clampNumber(
         readNumericSetting(minimapRecord?.fontSize),
         10,
@@ -2078,6 +2352,14 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 
 function isSidebarFontFamily(value: unknown): value is SidebarFontFamily {
   return value === 'sans' || value === 'mono' || value === 'serif'
+}
+
+function isDefaultMapType(value: unknown): value is DefaultMapType {
+  return value === 'graphic' || value === 'ascii'
+}
+
+function getDefaultMapPanelTab(settings: ClientSettings): MapPanelTabId {
+  return settings.minimap.defaultMapType === 'ascii' ? 'ascii' : 'graphic'
 }
 
 function readChunkedCookie(name: string) {
@@ -2960,13 +3242,320 @@ function hasCombatGaugeData(mudState: MudState) {
   return typeof mudState.opponentHealth === 'number' && mudState.opponentHealth > 0
 }
 
-function buildMapOutput(mudState: MudState) {
-  const minimap = mudState.minimap?.trimEnd()
-  if (minimap) {
-    return minimap
+function buildAsciiMapOutput(minimap?: string) {
+  return minimap && minimap.length > 0 ? minimap : 'Waiting for MINIMAP MSDP data.'
+}
+
+type GraphicMapRoomCell = {
+  key: string
+  title: string
+  kind: 'room'
+  color: string
+  isCurrent: boolean
+  markers: Array<{
+    id: string
+    icon: string
+    label: string
+  }>
+}
+
+type GraphicMapConnectorCell = {
+  key: string
+  title: string
+  kind: 'connector'
+  color: string
+  orientation: 'horizontal' | 'vertical' | 'diagonal-ascending' | 'diagonal-descending' | 'diagonal-cross'
+}
+
+type GraphicMapEmptyCell = {
+  key: string
+  title: string
+  kind: 'empty'
+  color?: undefined
+}
+
+type GraphicMapCell = GraphicMapRoomCell | GraphicMapConnectorCell | GraphicMapEmptyCell
+
+type BuiltGraphicMap = {
+  width: number
+  height: number
+  cells: GraphicMapCell[]
+}
+
+const GRAPHIC_MAP_SECTOR_COLORS: Record<number, string> = {
+  0: '#6b7280',
+  1: '#93c5fd',
+  2: '#84cc16',
+  3: '#166534',
+  4: '#a16207',
+  5: '#78716c',
+  6: '#6b7280',
+  7: '#0f766e',
+  8: '#0369a1',
+  9: '#b45309',
+  10: '#1e293b',
+  11: '#0f766e',
+  12: '#0f766e',
+  13: '#0f766e',
+  14: '#0f766e',
+  15: '#155e75',
+  16: '#3b82f6',
+  17: '#a3e635',
+  18: '#a3e635',
+  19: '#4ade80',
+  20: '#f59e0b',
+  21: '#4d7c0f',
+  22: '#dc2626',
+  23: '#475569',
+  24: '#7c2d12',
+  25: '#c2410c',
+  26: '#b91c1c',
+  27: '#1d4ed8',
+  28: '#a3a3a3',
+  29: '#f8fafc',
+  30: '#64748b',
+  31: '#14532d',
+  32: '#65a30d',
+  33: '#fbbf24',
+  34: '#991b1b',
+  35: '#52525b',
+  36: '#0891b2',
+}
+
+const GRAPHIC_MAP_DEFAULT_TILE_COLOR = '#111827'
+const GRAPHIC_MAP_MARKER_ICONS: Record<string, { icon: string; label: string }> = {
+  u: { icon: '↑', label: 'Up exit' },
+  d: { icon: '↓', label: 'Down exit' },
+  i: { icon: '🚪↘', label: 'Inside exit' },
+  o: { icon: '🚪↗', label: 'Outside exit' },
+}
+
+function buildGraphicMap(graphicMap?: GraphicMapData): BuiltGraphicMap | null {
+  if (!graphicMap?.rooms?.length) {
+    return null
   }
 
-  return 'Waiting for MINIMAP MSDP data.'
+  const validRooms = graphicMap.rooms.filter(isGraphicMapRoomWithCoordinates)
+  if (validRooms.length === 0) {
+    return null
+  }
+
+  const radius = clampGraphicMapRadius(graphicMap.radius)
+  const boundedRooms = validRooms.filter((room) => Math.abs(room.x) <= radius && Math.abs(room.y) <= radius)
+  if (boundedRooms.length === 0) {
+    return null
+  }
+
+  const roomGridSize = radius * 2 + 1
+  const width = roomGridSize * 2 - 1
+  const height = roomGridSize * 2 - 1
+  const roomsByPosition = new Map<string, GraphicMapRoom>()
+
+  for (const room of boundedRooms) {
+    roomsByPosition.set(`${room.x},${room.y}`, room)
+  }
+
+  const cells: GraphicMapCell[] = []
+
+  for (let gridY = 0; gridY < height; gridY += 1) {
+    for (let gridX = 0; gridX < width; gridX += 1) {
+      const key = `${gridX},${gridY}`
+      const roomX = Math.floor(gridX / 2) - radius
+      const roomY = Math.floor(gridY / 2) - radius
+      const isRoomColumn = gridX % 2 === 0
+      const isRoomRow = gridY % 2 === 0
+
+      if (isRoomColumn && isRoomRow) {
+        const room = roomsByPosition.get(`${roomX},${roomY}`)
+        if (!room) {
+          cells.push({ key, kind: 'empty', title: 'Unmapped room' })
+          continue
+        }
+
+        const sector = room.s
+        cells.push({
+          key,
+          kind: 'room',
+          color: sector === undefined ? GRAPHIC_MAP_DEFAULT_TILE_COLOR : getGraphicMapSectorColor(sector, room.i === 1),
+          isCurrent: roomX === 0 && roomY === 0,
+          markers: getGraphicMapMarkers(room.sp),
+          title: `Room ${room.v ?? 'unknown'} · sector ${sector ?? 'unknown'}${room.i === 1 ? ' · indoors' : ''}`,
+        })
+        continue
+      }
+
+      if (!isRoomColumn && isRoomRow) {
+        const leftRoom = roomsByPosition.get(`${roomX},${roomY}`)
+        const rightRoom = roomsByPosition.get(`${roomX + 1},${roomY}`)
+
+        if (leftRoom && rightRoom && shouldRenderGraphicMapConnection(leftRoom, rightRoom, 1, 0)) {
+          cells.push({
+            key,
+            kind: 'connector',
+            orientation: 'horizontal',
+            color: getGraphicMapConnectionColor(leftRoom, rightRoom),
+            title: `Connection between rooms ${leftRoom.v ?? 'unknown'} and ${rightRoom.v ?? 'unknown'}`,
+          })
+          continue
+        }
+      }
+
+      if (isRoomColumn && !isRoomRow) {
+        const topRoom = roomsByPosition.get(`${roomX},${roomY}`)
+        const bottomRoom = roomsByPosition.get(`${roomX},${roomY + 1}`)
+
+        if (topRoom && bottomRoom && shouldRenderGraphicMapConnection(topRoom, bottomRoom, 0, 1)) {
+          cells.push({
+            key,
+            kind: 'connector',
+            orientation: 'vertical',
+            color: getGraphicMapConnectionColor(topRoom, bottomRoom),
+            title: `Connection between rooms ${topRoom.v ?? 'unknown'} and ${bottomRoom.v ?? 'unknown'}`,
+          })
+          continue
+        }
+      }
+
+      if (!isRoomColumn && !isRoomRow) {
+        const northwestRoom = roomsByPosition.get(`${roomX},${roomY}`)
+        const northeastRoom = roomsByPosition.get(`${roomX + 1},${roomY}`)
+        const southwestRoom = roomsByPosition.get(`${roomX},${roomY + 1}`)
+        const southeastRoom = roomsByPosition.get(`${roomX + 1},${roomY + 1}`)
+        const hasDescendingDiagonal =
+          northwestRoom &&
+          southeastRoom &&
+          !northeastRoom &&
+          !southwestRoom &&
+          shouldRenderGraphicMapConnection(northwestRoom, southeastRoom, 1, 1)
+        const hasAscendingDiagonal =
+          northeastRoom &&
+          southwestRoom &&
+          !northwestRoom &&
+          !southeastRoom &&
+          shouldRenderGraphicMapConnection(northeastRoom, southwestRoom, -1, 1)
+
+        const descendingColor =
+          hasDescendingDiagonal
+            ? getGraphicMapConnectionColor(northwestRoom, southeastRoom)
+            : null
+        const ascendingColor =
+          hasAscendingDiagonal
+            ? getGraphicMapConnectionColor(northeastRoom, southwestRoom)
+            : null
+
+        if (descendingColor || ascendingColor) {
+          const diagonalConnections: string[] = []
+          if (northwestRoom && southeastRoom) {
+            diagonalConnections.push(`NW-SE between rooms ${northwestRoom.v ?? 'unknown'} and ${southeastRoom.v ?? 'unknown'}`)
+          }
+
+          if (northeastRoom && southwestRoom) {
+            diagonalConnections.push(`NE-SW between rooms ${northeastRoom.v ?? 'unknown'} and ${southwestRoom.v ?? 'unknown'}`)
+          }
+
+          cells.push({
+            key,
+            kind: 'connector',
+            orientation:
+              descendingColor && ascendingColor
+                ? 'diagonal-cross'
+                : descendingColor
+                  ? 'diagonal-descending'
+                  : 'diagonal-ascending',
+            color:
+              descendingColor && ascendingColor
+                ? mixGraphicMapColor(descendingColor, ascendingColor, 0.5)
+                : descendingColor ?? ascendingColor ?? GRAPHIC_MAP_DEFAULT_TILE_COLOR,
+            title: `Diagonal connection${diagonalConnections.length > 1 ? 's' : ''}: ${diagonalConnections.join(' · ')}`,
+          })
+          continue
+        }
+      }
+
+      cells.push({ key, kind: 'empty', title: 'Unmapped space' })
+    }
+  }
+
+  return { width, height, cells }
+}
+
+function isGraphicMapRoomWithCoordinates(room: GraphicMapRoom): room is GraphicMapRoom & { x: number; y: number } {
+  return typeof room.x === 'number' && Number.isFinite(room.x) && typeof room.y === 'number' && Number.isFinite(room.y)
+}
+
+function shouldRenderGraphicMapConnection(
+  firstRoom: GraphicMapRoom | undefined,
+  secondRoom: GraphicMapRoom | undefined,
+  offsetX: number,
+  offsetY: number,
+) {
+  if (!firstRoom || !secondRoom || !isGraphicMapRoomWithCoordinates(firstRoom) || !isGraphicMapRoomWithCoordinates(secondRoom)) {
+    return false
+  }
+
+  return firstRoom.x + offsetX === secondRoom.x && firstRoom.y + offsetY === secondRoom.y
+}
+
+function clampGraphicMapRadius(radius?: number) {
+  if (typeof radius !== 'number' || !Number.isFinite(radius)) {
+    return 8
+  }
+
+  return Math.max(1, Math.min(16, Math.trunc(radius)))
+}
+
+function getGraphicMapSectorColor(sector: number, isIndoors: boolean) {
+  const base = GRAPHIC_MAP_SECTOR_COLORS[sector] ?? GRAPHIC_MAP_DEFAULT_TILE_COLOR
+  return isIndoors ? mixGraphicMapColor(base, '#d4d4d8', 0.2) : base
+}
+
+function getGraphicMapConnectionColor(firstRoom: GraphicMapRoom, secondRoom: GraphicMapRoom) {
+  const firstColor = getGraphicMapSectorColor(firstRoom.s ?? -1, firstRoom.i === 1)
+  const secondColor = getGraphicMapSectorColor(secondRoom.s ?? -1, secondRoom.i === 1)
+  return mixGraphicMapColor(firstColor, secondColor, 0.5)
+}
+
+function mixGraphicMapColor(primary: string, secondary: string, ratio: number) {
+  const primaryRgb = hexToRgb(primary)
+  const secondaryRgb = hexToRgb(secondary)
+  if (!primaryRgb || !secondaryRgb) {
+    return primary
+  }
+
+  const mix = (from: number, to: number) => Math.round(from * (1 - ratio) + to * ratio)
+
+  return `rgb(${mix(primaryRgb[0], secondaryRgb[0])}, ${mix(primaryRgb[1], secondaryRgb[1])}, ${mix(primaryRgb[2], secondaryRgb[2])})`
+}
+
+function hexToRgb(value: string): [number, number, number] | null {
+  const normalized = value.trim().replace('#', '')
+  if (!/^[\da-f]{6}$/i.test(normalized)) {
+    return null
+  }
+
+  return [0, 2, 4].map((offset) => Number.parseInt(normalized.slice(offset, offset + 2), 16)) as [number, number, number]
+}
+
+function getGraphicMapMarkers(specials?: string) {
+  if (!specials) {
+    return []
+  }
+
+  return specials
+    .split('')
+    .map((special, index) => {
+      const marker = GRAPHIC_MAP_MARKER_ICONS[special]
+      if (!marker) {
+        return null
+      }
+
+      return {
+        id: `${special}-${index}`,
+        icon: marker.icon,
+        label: marker.label,
+      }
+    })
+    .filter((marker): marker is { id: string; icon: string; label: string } => marker !== null)
 }
 
 function findMatchingMudPresetId(mudPresets: AppSettings['connection']['muds'], host: string, port: number) {
@@ -2980,31 +3569,32 @@ function renderMudHtml(value: string) {
 }
 
 function convertLuminariColorCodes(value: string) {
+  const normalized = value.replace(/\\t/g, KRYNN_COLOR_CHAR)
   let converted = ''
 
-  for (let index = 0; index < value.length; index += 1) {
-    const current = value[index]
-    if (current !== LUMINARI_COLOR_CHAR) {
+  for (let index = 0; index < normalized.length; index += 1) {
+    const current = normalized[index]
+    if (current !== LUMINARI_COLOR_CHAR && current !== KRYNN_COLOR_CHAR) {
       converted += current
       continue
     }
 
-    const next = value[index + 1]
+    const next = normalized[index + 1]
     if (!next) {
       converted += current
       continue
     }
 
-    if (next === LUMINARI_COLOR_CHAR) {
+    if (next === current) {
       converted += LUMINARI_COLOR_CHAR
       index += 1
       continue
     }
 
     if (next === '[') {
-      const endIndex = value.indexOf(']', index + 2)
+      const endIndex = normalized.indexOf(']', index + 2)
       if (endIndex > index + 2) {
-        const luminariRgb = value.slice(index + 2, endIndex)
+        const luminariRgb = normalized.slice(index + 2, endIndex)
         const ansiColor = luminariRgbToAnsi(luminariRgb)
         if (ansiColor) {
           converted += ansiColor

@@ -8,6 +8,23 @@ export type MudValue =
       [key: string]: MudValue
     }
 
+export type GraphicMapSpecialExit = 'u' | 'd' | 'i' | 'o'
+
+export type GraphicMapRoom = {
+  x?: number
+  y?: number
+  v?: number
+  s?: number
+  i?: number
+  sp?: string
+}
+
+export type GraphicMapData = {
+  ver?: number
+  radius?: number
+  rooms?: GraphicMapRoom[]
+}
+
 export interface MudState {
   characterName?: string
   title?: string
@@ -56,6 +73,7 @@ export interface MudState {
   roomEnvironment?: string
   automap?: string
   minimap?: string
+  graphicMap?: GraphicMapData
   worldTime?: string
   actions?: MudValue
   affects?: MudValue
@@ -101,6 +119,7 @@ export const defaultMsdpVariables = {
   alignment: 'ALIGNMENT',
   money: 'MONEY',
   minimap: 'MINIMAP',
+  graphicMap: 'GRAPHIC_MAP',
   affects: 'AFFECTS',
   group: 'GROUP',
   questInfo: 'QUEST_INFO',
@@ -148,6 +167,7 @@ export function normalizeMsdpVariableMap(value: unknown): MsdpVariableMap {
     alignment: normalizeMsdpVariableValue(raw.alignment, defaultMsdpVariables.alignment),
     money: normalizeMsdpVariableValue(raw.money, defaultMsdpVariables.money),
     minimap: normalizeMsdpVariableValue(raw.minimap, defaultMsdpVariables.minimap),
+    graphicMap: normalizeMsdpVariableValue(raw.graphicMap, defaultMsdpVariables.graphicMap),
     affects: normalizeMsdpVariableValue(raw.affects, defaultMsdpVariables.affects),
     group: normalizeMsdpVariableValue(raw.group, defaultMsdpVariables.group),
     questInfo: normalizeMsdpVariableValue(raw.questInfo, defaultMsdpVariables.questInfo),

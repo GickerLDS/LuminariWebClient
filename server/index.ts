@@ -56,6 +56,31 @@ const CONTROL_BYTES = new Set([
   MSDP_ARRAY_OPEN,
   MSDP_ARRAY_CLOSE,
 ])
+const REQUIRED_MSDP_VARIABLES = ['ROOM']
+const MOVEMENT_COMMANDS = new Set([
+  'n',
+  'north',
+  's',
+  'south',
+  'e',
+  'east',
+  'w',
+  'west',
+  'ne',
+  'northeast',
+  'nw',
+  'northwest',
+  'se',
+  'southeast',
+  'sw',
+  'southwest',
+  'u',
+  'up',
+  'd',
+  'down',
+  'in',
+  'out',
+])
 const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
@@ -211,8 +236,14 @@ class MudSession {
       return
     }
 
+    const normalizedInput = text.trim().toLowerCase()
+
     this.mudSocket.write(text.endsWith('\n') ? text : `${text}\n`)
     this.requestStateRefresh()
+
+    if (MOVEMENT_COMMANDS.has(normalizedInput)) {
+      this.requestMovementMapRefresh()
+    }
   }
 
   sendStatus(status: ConnectionStatus, detail: string) {
@@ -253,6 +284,22 @@ class MudSession {
     }
 
     for (const variable of getConfiguredMsdpVariables(this.msdpVariables)) {
+      this.sendMsdpPair('SEND', variable)
+    }
+  }
+
+  private requestMovementMapRefresh() {
+    if (!this.msdpInitialized) {
+      return
+    }
+
+    const mapVariables = new Set([this.msdpVariables.graphicMap.trim(), this.msdpVariables.minimap.trim()])
+
+    for (const variable of mapVariables) {
+      if (!variable) {
+        continue
+      }
+
       this.sendMsdpPair('SEND', variable)
     }
   }
@@ -571,11 +618,23 @@ function readValue(payload: Buffer, index: number): [MudValue, number] {
     let cursor = index + 1
 
     while (cursor < payload.length && payload[cursor] !== MSDP_ARRAY_CLOSE) {
+      if (payload[cursor] === MSDP_ARRAY_OPEN || payload[cursor] === MSDP_TABLE_OPEN) {
+        const [value, nextCursor] = readValue(payload, cursor)
+        items.push(value)
+        cursor = nextCursor
+        continue
+      }
+
       if (payload[cursor] === MSDP_VAL) {
         cursor += 1
         const [value, nextCursor] = readValue(payload, cursor)
         items.push(value)
         cursor = nextCursor
+        continue
+      }
+
+      if (CONTROL_BYTES.has(payload[cursor])) {
+        cursor += 1
         continue
       }
 
@@ -644,12 +703,26 @@ function normalizeScalar(value: string): MudValue {
 }
 
 function getConfiguredMsdpVariables(msdpVariables: MsdpVariableMap) {
-  return [...new Set(Object.values(msdpVariables).map((value) => value.trim()).filter(Boolean))]
+  const variables = new Set(Object.values(msdpVariables).map((value) => value.trim()).filter(Boolean))
+  const graphicMapVariable = msdpVariables.graphicMap.trim()
+
+  if (graphicMapVariable) {
+    variables.add(graphicMapVariable.toUpperCase())
+    variables.add(graphicMapVariable.toLowerCase())
+  }
+
+  for (const variable of REQUIRED_MSDP_VARIABLES) {
+    variables.add(variable)
+  }
+
+  return [...variables]
 }
 
 function resolveMsdpVariableKey(variable: string, msdpVariables: MsdpVariableMap): MsdpVariableKey | null {
+  const normalizedVariable = variable.trim().toUpperCase()
+
   for (const [key, configuredVariable] of Object.entries(msdpVariables)) {
-    if (configuredVariable === variable) {
+    if (configuredVariable.trim().toUpperCase() === normalizedVariable) {
       return key as MsdpVariableKey
     }
   }
@@ -658,6 +731,10 @@ function resolveMsdpVariableKey(variable: string, msdpVariables: MsdpVariableMap
 }
 
 function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVariableMap): Partial<MudState> {
+  if (variable.trim().toUpperCase() === 'ROOM') {
+    return mapRoomMsdpUpdate(value)
+  }
+
   const key = resolveMsdpVariableKey(variable, msdpVariables)
   if (!key) {
     return {}
@@ -753,6 +830,9 @@ function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVar
     case 'minimap':
       partial.minimap = toOptionalString(value)
       break
+    case 'graphicMap':
+      partial.graphicMap = toGraphicMapData(value)
+      break
     case 'affects':
       partial.affects = value
       break
@@ -787,7 +867,56 @@ function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVar
   return partial
 }
 
-function toOptionalNumber(value: MudValue) {
+function mapRoomMsdpUpdate(value: MudValue): Partial<MudState> {
+  const partial: Partial<MudState> = { room: value }
+  const roomRecord = toMudRecord(value)
+
+  if (!roomRecord) {
+    return partial
+  }
+
+  const exitsRecord = toMudRecord(getMudRecordValue(roomRecord, 'EXITS'))
+  const coordsRecord = toMudRecord(getMudRecordValue(roomRecord, 'COORDS'))
+
+  partial.roomVnum = toOptionalNumber(getMudRecordValue(roomRecord, 'VNUM'))
+  partial.roomName = toOptionalString(getMudRecordValue(roomRecord, 'NAME'))
+  partial.areaName = toOptionalString(getMudRecordValue(roomRecord, 'AREA'))
+  partial.roomEnvironment = toOptionalString(getMudRecordValue(roomRecord, 'ENVIRONMENT'))
+  partial.roomTerrain = toOptionalString(getMudRecordValue(roomRecord, 'TERRAIN'))
+  partial.roomExits = exitsRecord ? Object.keys(exitsRecord) : []
+
+  if (coordsRecord) {
+    partial.roomCoords = {
+      x: toOptionalNumber(getMudRecordValue(coordsRecord, 'X')),
+      y: toOptionalNumber(getMudRecordValue(coordsRecord, 'Y')),
+      z: toOptionalNumber(getMudRecordValue(coordsRecord, 'Z')),
+    }
+  }
+
+  return partial
+}
+
+function toMudRecord(value: MudValue | undefined) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  return value as Record<string, MudValue>
+}
+
+function getMudRecordValue(record: Record<string, MudValue>, key: string) {
+  const normalizedKey = key.trim().toUpperCase()
+
+  for (const [entryKey, entryValue] of Object.entries(record)) {
+    if (entryKey.trim().toUpperCase() === normalizedKey) {
+      return entryValue
+    }
+  }
+
+  return undefined
+}
+
+function toOptionalNumber(value: MudValue | undefined) {
   if (typeof value === 'number') {
     return value
   }
@@ -799,7 +928,7 @@ function toOptionalNumber(value: MudValue) {
   return undefined
 }
 
-function toOptionalString(value: MudValue) {
+function toOptionalString(value: MudValue | undefined) {
   if (typeof value === 'string') {
     return value
   }
@@ -809,4 +938,97 @@ function toOptionalString(value: MudValue) {
   }
 
   return undefined
+}
+
+function toGraphicMapData(value: MudValue) {
+  if (typeof value === 'string') {
+    const parsed = parseGraphicMapString(value)
+    return parsed ? normalizeGraphicMapData(parsed) : undefined
+  }
+
+  return normalizeGraphicMapData(value)
+}
+
+function normalizeGraphicMapData(value: MudValue) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+
+  const record = value as Record<string, MudValue>
+  const roomsValue = Array.isArray(record.rooms) ? record.rooms : []
+
+  return {
+    ver: toOptionalNumber(record.ver),
+    radius: toOptionalNumber(record.radius),
+    rooms: roomsValue
+      .filter((room): room is Record<string, MudValue> => Boolean(room) && typeof room === 'object' && !Array.isArray(room))
+      .map((room) => ({
+        x: toOptionalNumber(room.x),
+        y: toOptionalNumber(room.y),
+        v: toOptionalNumber(room.v),
+        s: toOptionalNumber(room.s),
+        i: toOptionalNumber(room.i),
+        sp: toOptionalString(room.sp),
+      })),
+  }
+}
+
+function parseGraphicMapString(value: string): MudValue | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return JSON.parse(trimmed) as MudValue
+    } catch {
+      return null
+    }
+  }
+
+  const payload = decodeGraphicMapTokenString(trimmed)
+  if (!payload || payload.length === 0) {
+    return null
+  }
+
+  const [parsed] = readValue(payload, 0)
+  return parsed
+}
+
+function decodeGraphicMapTokenString(value: string) {
+  const tokenPattern = /<(TABLE_OPEN|TABLE_CLOSE|ARRAY_OPEN|ARRAY_CLOSE|VAR|VAL)>/g
+  const tokenBytes: Record<string, number> = {
+    TABLE_OPEN: MSDP_TABLE_OPEN,
+    TABLE_CLOSE: MSDP_TABLE_CLOSE,
+    ARRAY_OPEN: MSDP_ARRAY_OPEN,
+    ARRAY_CLOSE: MSDP_ARRAY_CLOSE,
+    VAR: MSDP_VAR,
+    VAL: MSDP_VAL,
+  }
+  const bytes: number[] = []
+  let lastIndex = 0
+
+  for (const match of value.matchAll(tokenPattern)) {
+    const tokenIndex = match.index ?? 0
+    const literal = value.slice(lastIndex, tokenIndex)
+    if (literal) {
+      bytes.push(...Buffer.from(literal, 'utf8'))
+    }
+
+    const tokenName = match[1]
+    const tokenByte = tokenBytes[tokenName]
+    if (tokenByte !== undefined) {
+      bytes.push(tokenByte)
+    }
+
+    lastIndex = tokenIndex + match[0].length
+  }
+
+  const remainder = value.slice(lastIndex)
+  if (remainder) {
+    bytes.push(...Buffer.from(remainder, 'utf8'))
+  }
+
+  return bytes.length > 0 ? Buffer.from(bytes) : null
 }
