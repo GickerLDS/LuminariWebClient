@@ -93,6 +93,17 @@ app.get('/health', (_request, response) => {
   response.json({ ok: true })
 })
 
+// Debug capture: stores the last raw + normalized GRAPHIC_MAP value from any session
+let _debugLastRawGraphicMap: MudValue | undefined
+let _debugLastNormalizedGraphicMap: unknown
+
+app.get('/api/debug/graphic-map', (_request, response) => {
+  response.json({
+    raw: _debugLastRawGraphicMap,
+    normalized: _debugLastNormalizedGraphicMap,
+  })
+})
+
 app.get('/api/settings', (_request, response) => {
   response.json(appSettings)
 })
@@ -941,12 +952,25 @@ function toOptionalString(value: MudValue | undefined) {
 }
 
 function toGraphicMapData(value: MudValue) {
+  _debugLastRawGraphicMap = value
   if (typeof value === 'string') {
     const parsed = parseGraphicMapString(value)
-    return parsed ? normalizeGraphicMapData(parsed) : undefined
+    const result = parsed ? normalizeGraphicMapData(parsed) : undefined
+    if (result) {
+      const cCount = result.rooms?.filter(r => r.c !== undefined).length ?? 0
+      process.stderr.write(`[GRAPHIC_MAP] ver=${result.ver} rooms=${result.rooms?.length} cFields=${cCount} (from string)\n`)
+    }
+    _debugLastNormalizedGraphicMap = result
+    return result
   }
 
-  return normalizeGraphicMapData(value)
+  const result = normalizeGraphicMapData(value)
+  if (result) {
+    const cCount = result.rooms?.filter(r => r.c !== undefined).length ?? 0
+    process.stderr.write(`[GRAPHIC_MAP] ver=${result.ver} rooms=${result.rooms?.length} cFields=${cCount} (from object)\n`)
+  }
+  _debugLastNormalizedGraphicMap = result
+  return result
 }
 
 function normalizeGraphicMapData(value: MudValue) {
@@ -955,20 +979,22 @@ function normalizeGraphicMapData(value: MudValue) {
   }
 
   const record = value as Record<string, MudValue>
-  const roomsValue = Array.isArray(record.rooms) ? record.rooms : []
+  const roomsCandidate = getMudRecordValue(record, 'rooms')
+  const roomsValue = Array.isArray(roomsCandidate) ? roomsCandidate : []
 
   return {
-    ver: toOptionalNumber(record.ver),
-    radius: toOptionalNumber(record.radius),
+    ver: toOptionalNumber(getMudRecordValue(record, 'ver')),
+    radius: toOptionalNumber(getMudRecordValue(record, 'radius')),
     rooms: roomsValue
       .filter((room): room is Record<string, MudValue> => Boolean(room) && typeof room === 'object' && !Array.isArray(room))
       .map((room) => ({
-        x: toOptionalNumber(room.x),
-        y: toOptionalNumber(room.y),
-        v: toOptionalNumber(room.v),
-        s: toOptionalNumber(room.s),
-        i: toOptionalNumber(room.i),
-        sp: toOptionalString(room.sp),
+        x: toOptionalNumber(getMudRecordValue(room, 'x')),
+        y: toOptionalNumber(getMudRecordValue(room, 'y')),
+        v: toOptionalNumber(getMudRecordValue(room, 'v')),
+        s: toOptionalNumber(getMudRecordValue(room, 's')),
+        i: toOptionalNumber(getMudRecordValue(room, 'i')),
+        sp: toOptionalString(getMudRecordValue(room, 'sp')),
+        c: toOptionalNumber(getMudRecordValue(room, 'c')),
       })),
   }
 }

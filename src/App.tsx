@@ -451,10 +451,6 @@ function App() {
   }, [clientSettings])
 
   useEffect(() => {
-    setActiveMapTab(getDefaultMapPanelTab(clientSettings))
-  }, [clientSettings.minimap.defaultMapType])
-
-  useEffect(() => {
     if (!openAutomationMenu) {
       return
     }
@@ -742,7 +738,7 @@ function App() {
   )
 
   const asciiMapOutput = useMemo(() => buildAsciiMapOutput(mudState.minimap), [mudState.minimap])
-  const graphicMap = useMemo(() => buildGraphicMap(mudState.graphicMap), [mudState.graphicMap])
+  const graphicMap = useMemo(() => buildGraphicMap(mudState.graphicMap, mudState.minimap), [mudState.graphicMap, mudState.minimap])
   const activeMapPanel = useMemo(
     () => MAP_PANEL_TABS.find((tab) => tab.id === activeMapTab) ?? MAP_PANEL_TABS[0],
     [activeMapTab],
@@ -1011,6 +1007,9 @@ function App() {
         ...updates,
       },
     }))
+    if (updates.defaultMapType !== undefined) {
+      setActiveMapTab(updates.defaultMapType === 'ascii' ? 'ascii' : 'graphic')
+    }
     setAutomationNotice(null)
   }
 
@@ -1061,6 +1060,7 @@ function App() {
     try {
       const importedConfig = parseClientConfigImport(await file.text(), clientSettings, aliases, triggers)
       setClientSettings(importedConfig.settings)
+      setActiveMapTab(getDefaultMapPanelTab(importedConfig.settings))
       setAliases(importedConfig.aliases)
       setTriggers(importedConfig.triggers)
       setOpenAutomationMenu(null)
@@ -3330,7 +3330,7 @@ const GRAPHIC_MAP_MARKER_ICONS: Record<string, { icon: string; label: string }> 
   o: { icon: '🚪↗', label: 'Outside exit' },
 }
 
-function buildGraphicMap(graphicMap?: GraphicMapData): BuiltGraphicMap | null {
+function buildGraphicMap(graphicMap?: GraphicMapData, minimap?: string): BuiltGraphicMap | null {
   if (!graphicMap?.rooms?.length) {
     return null
   }
@@ -3354,6 +3354,8 @@ function buildGraphicMap(graphicMap?: GraphicMapData): BuiltGraphicMap | null {
   for (const room of boundedRooms) {
     roomsByPosition.set(`${room.x},${room.y}`, room)
   }
+
+  const connectionMap = inferGraphicMapConnections(boundedRooms, minimap)
 
   const cells: GraphicMapCell[] = []
 
@@ -3388,7 +3390,7 @@ function buildGraphicMap(graphicMap?: GraphicMapData): BuiltGraphicMap | null {
         const leftRoom = roomsByPosition.get(`${roomX},${roomY}`)
         const rightRoom = roomsByPosition.get(`${roomX + 1},${roomY}`)
 
-        if (leftRoom && rightRoom && shouldRenderGraphicMapConnection(leftRoom, rightRoom, 1, 0)) {
+        if (leftRoom && rightRoom && shouldRenderGraphicMapConnection(leftRoom, rightRoom, 1, 0, connectionMap)) {
           cells.push({
             key,
             kind: 'connector',
@@ -3404,7 +3406,7 @@ function buildGraphicMap(graphicMap?: GraphicMapData): BuiltGraphicMap | null {
         const topRoom = roomsByPosition.get(`${roomX},${roomY}`)
         const bottomRoom = roomsByPosition.get(`${roomX},${roomY + 1}`)
 
-        if (topRoom && bottomRoom && shouldRenderGraphicMapConnection(topRoom, bottomRoom, 0, 1)) {
+        if (topRoom && bottomRoom && shouldRenderGraphicMapConnection(topRoom, bottomRoom, 0, 1, connectionMap)) {
           cells.push({
             key,
             kind: 'connector',
@@ -3421,35 +3423,33 @@ function buildGraphicMap(graphicMap?: GraphicMapData): BuiltGraphicMap | null {
         const northeastRoom = roomsByPosition.get(`${roomX + 1},${roomY}`)
         const southwestRoom = roomsByPosition.get(`${roomX},${roomY + 1}`)
         const southeastRoom = roomsByPosition.get(`${roomX + 1},${roomY + 1}`)
-        const hasDescendingDiagonal =
+        const hasDescendingDiagonal = Boolean(
           northwestRoom &&
-          southeastRoom &&
-          !northeastRoom &&
-          !southwestRoom &&
-          shouldRenderGraphicMapConnection(northwestRoom, southeastRoom, 1, 1)
-        const hasAscendingDiagonal =
+            southeastRoom &&
+            shouldRenderGraphicMapConnection(northwestRoom, southeastRoom, 1, 1, connectionMap),
+        )
+        const hasAscendingDiagonal = Boolean(
           northeastRoom &&
-          southwestRoom &&
-          !northwestRoom &&
-          !southeastRoom &&
-          shouldRenderGraphicMapConnection(northeastRoom, southwestRoom, -1, 1)
+            southwestRoom &&
+            shouldRenderGraphicMapConnection(northeastRoom, southwestRoom, -1, 1, connectionMap),
+        )
 
         const descendingColor =
-          hasDescendingDiagonal
+          hasDescendingDiagonal && northwestRoom && southeastRoom
             ? getGraphicMapConnectionColor(northwestRoom, southeastRoom)
             : null
         const ascendingColor =
-          hasAscendingDiagonal
+          hasAscendingDiagonal && northeastRoom && southwestRoom
             ? getGraphicMapConnectionColor(northeastRoom, southwestRoom)
             : null
 
         if (descendingColor || ascendingColor) {
           const diagonalConnections: string[] = []
-          if (northwestRoom && southeastRoom) {
+          if (hasDescendingDiagonal && northwestRoom && southeastRoom) {
             diagonalConnections.push(`NW-SE between rooms ${northwestRoom.v ?? 'unknown'} and ${southeastRoom.v ?? 'unknown'}`)
           }
 
-          if (northeastRoom && southwestRoom) {
+          if (hasAscendingDiagonal && northeastRoom && southwestRoom) {
             diagonalConnections.push(`NE-SW between rooms ${northeastRoom.v ?? 'unknown'} and ${southwestRoom.v ?? 'unknown'}`)
           }
 
@@ -3488,20 +3488,358 @@ function shouldRenderGraphicMapConnection(
   secondRoom: GraphicMapRoom | undefined,
   offsetX: number,
   offsetY: number,
+  connectionMap: GraphicMapConnectionMap,
 ) {
   if (!firstRoom || !secondRoom || !isGraphicMapRoomWithCoordinates(firstRoom) || !isGraphicMapRoomWithCoordinates(secondRoom)) {
     return false
   }
 
-  return firstRoom.x + offsetX === secondRoom.x && firstRoom.y + offsetY === secondRoom.y
+  return isKnownGraphicMapConnection(firstRoom, secondRoom, offsetX, offsetY, connectionMap)
+}
+
+type GraphicMapDirection = 'n' | 'e' | 's' | 'w' | 'nw' | 'ne' | 'se' | 'sw'
+
+type GraphicMapConnectionMap = Record<string, Partial<Record<GraphicMapDirection, string>>>
+
+const GRAPHIC_MAP_DIRECTION_ORDER: GraphicMapDirection[] = ['n', 'e', 's', 'w', 'nw', 'ne', 'se', 'sw']
+
+const GRAPHIC_MAP_OPPOSITE_DIRECTIONS: Record<GraphicMapDirection, GraphicMapDirection> = {
+  n: 's',
+  e: 'w',
+  s: 'n',
+  w: 'e',
+  nw: 'se',
+  ne: 'sw',
+  se: 'nw',
+  sw: 'ne',
+}
+
+const GRAPHIC_MAP_DIRECTION_OFFSETS: Record<GraphicMapDirection, [number, number]> = {
+  n: [0, -1],
+  e: [1, 0],
+  s: [0, 1],
+  w: [-1, 0],
+  nw: [-1, -1],
+  ne: [1, -1],
+  se: [1, 1],
+  sw: [-1, 1],
+}
+
+const GRAPHIC_MAP_CONNECTION_BITS: Record<GraphicMapDirection, number> = {
+  n: 1 << 0,
+  e: 1 << 1,
+  s: 1 << 2,
+  w: 1 << 3,
+  nw: 1 << 4,
+  ne: 1 << 5,
+  se: 1 << 6,
+  sw: 1 << 7,
+}
+
+function isKnownGraphicMapConnection(
+  firstRoom: GraphicMapRoom & { x: number; y: number },
+  secondRoom: GraphicMapRoom & { x: number; y: number },
+  offsetX: number,
+  offsetY: number,
+  connectionMap: GraphicMapConnectionMap,
+) {
+  const direction = getGraphicMapDirectionForOffset(offsetX, offsetY)
+  if (!direction) {
+    return false
+  }
+
+  const firstRoomKey = getGraphicMapRoomKey(firstRoom)
+  const secondRoomKey = getGraphicMapRoomKey(secondRoom)
+  const reverseDirection = GRAPHIC_MAP_OPPOSITE_DIRECTIONS[direction]
+
+  return (
+    connectionMap[firstRoomKey]?.[direction] === secondRoomKey ||
+    connectionMap[secondRoomKey]?.[reverseDirection] === firstRoomKey
+  )
+}
+
+function inferGraphicMapConnections(
+  rooms: Array<GraphicMapRoom & { x: number; y: number }>,
+  minimap?: string,
+): GraphicMapConnectionMap {
+  const authoritativeConnections = inferGraphicMapConnectionsFromRoomConnectors(rooms)
+  if (authoritativeConnections) {
+    return authoritativeConnections
+  }
+
+  return inferGraphicMapConnectionsFromMinimap(rooms, minimap)
+}
+
+function inferGraphicMapConnectionsFromRoomConnectors(
+  rooms: Array<GraphicMapRoom & { x: number; y: number }>,
+): GraphicMapConnectionMap | null {
+  const hasAuthoritativeConnectors = rooms.some((room) => typeof room.c === 'number' && Number.isFinite(room.c))
+
+  if (!hasAuthoritativeConnectors) {
+    return null
+  }
+
+  const roomsByCoordinate = new Map(rooms.map((room) => [`${room.x},${room.y}`, room] as const))
+  const connectionMap: GraphicMapConnectionMap = {}
+
+  for (const room of rooms) {
+    const roomKey = getGraphicMapRoomKey(room)
+    const connectionMask = typeof room.c === 'number' && Number.isFinite(room.c) ? Math.trunc(room.c) : 0
+
+    for (const direction of GRAPHIC_MAP_DIRECTION_ORDER) {
+      if ((connectionMask & GRAPHIC_MAP_CONNECTION_BITS[direction]) === 0) {
+        continue
+      }
+
+      const [offsetX, offsetY] = GRAPHIC_MAP_DIRECTION_OFFSETS[direction]
+      const targetRoom = roomsByCoordinate.get(`${room.x + offsetX},${room.y + offsetY}`)
+      if (!targetRoom) {
+        continue
+      }
+
+      const targetKey = getGraphicMapRoomKey(targetRoom)
+      connectionMap[roomKey] = {
+        ...(connectionMap[roomKey] ?? {}),
+        [direction]: targetKey,
+      }
+      connectionMap[targetKey] = {
+        ...(connectionMap[targetKey] ?? {}),
+        [GRAPHIC_MAP_OPPOSITE_DIRECTIONS[direction]]: roomKey,
+      }
+    }
+  }
+
+  return connectionMap
+}
+
+type MinimapRoomToken = {
+  x: number
+  y: number
+  row: number
+  column: number
+}
+
+function inferGraphicMapConnectionsFromMinimap(
+  rooms: Array<GraphicMapRoom & { x: number; y: number }>,
+  minimap?: string,
+): GraphicMapConnectionMap {
+  const tokens = parseMinimapRoomTokens(minimap)
+  if (!tokens) {
+    return {}
+  }
+
+  const roomKeysByCoordinate = new Map<string, string>()
+  for (const room of rooms) {
+    roomKeysByCoordinate.set(`${room.x},${room.y}`, getGraphicMapRoomKey(room))
+  }
+
+  const connectionMap: GraphicMapConnectionMap = {}
+  const directions: Array<[GraphicMapDirection, number, number]> = [
+    ['e', 1, 0],
+    ['s', 0, 1],
+    ['se', 1, 1],
+    ['sw', -1, 1],
+  ]
+
+  for (const token of tokens.rooms) {
+    const fromKey = roomKeysByCoordinate.get(`${token.x},${token.y}`)
+    if (!fromKey) {
+      continue
+    }
+
+    for (const [direction, offsetX, offsetY] of directions) {
+      const neighborToken = tokens.byCoordinate.get(`${token.x + offsetX},${token.y + offsetY}`)
+      if (!neighborToken) {
+        continue
+      }
+
+      const toKey = roomKeysByCoordinate.get(`${neighborToken.x},${neighborToken.y}`)
+      if (!toKey) {
+        continue
+      }
+
+      if (!minimapShowsGraphicMapConnection(tokens.lines, token, neighborToken, direction)) {
+        continue
+      }
+
+      const reverseDirection = GRAPHIC_MAP_OPPOSITE_DIRECTIONS[direction]
+      connectionMap[fromKey] = {
+        ...(connectionMap[fromKey] ?? {}),
+        [direction]: toKey,
+      }
+      connectionMap[toKey] = {
+        ...(connectionMap[toKey] ?? {}),
+        [reverseDirection]: fromKey,
+      }
+    }
+  }
+
+  return connectionMap
+}
+
+function parseMinimapRoomTokens(minimap?: string) {
+  if (!minimap) {
+    return null
+  }
+
+  const normalized = stripMudFormatting(minimap).replace(/\r/g, '')
+  const lines = normalized.split('\n')
+  const rawTokens: Array<{ row: number; column: number; token: string }> = []
+
+  for (const [row, line] of lines.entries()) {
+    const matches = line.matchAll(/\[[^\]]\]/g)
+    for (const match of matches) {
+      if (match.index === undefined) {
+        continue
+      }
+
+      rawTokens.push({ row, column: match.index, token: match[0] })
+    }
+  }
+
+  if (rawTokens.length === 0) {
+    return null
+  }
+
+  const currentToken = rawTokens.find((token) => token.token === '[&]')
+  if (!currentToken) {
+    return null
+  }
+
+  const columnStep = getMinimapAxisStep(rawTokens.map((token) => token.column))
+  const rowStep = getMinimapAxisStep(rawTokens.map((token) => token.row))
+  if (!columnStep || !rowStep) {
+    return null
+  }
+
+  const rooms = rawTokens.map<MinimapRoomToken>((token) => ({
+    x: Math.round((token.column - currentToken.column) / columnStep),
+    y: Math.round((token.row - currentToken.row) / rowStep),
+    row: token.row,
+    column: token.column,
+  }))
+
+  return {
+    lines,
+    rooms,
+    byCoordinate: new Map(rooms.map((room) => [`${room.x},${room.y}`, room])),
+  }
+}
+
+function getMinimapAxisStep(values: number[]) {
+  const uniqueValues = [...new Set(values)].sort((left, right) => left - right)
+  let step = 0
+
+  for (let index = 1; index < uniqueValues.length; index += 1) {
+    const delta = uniqueValues[index] - uniqueValues[index - 1]
+    if (delta <= 0) {
+      continue
+    }
+
+    step = step === 0 ? delta : greatestCommonDivisor(step, delta)
+  }
+
+  return step || null
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  let a = Math.abs(left)
+  let b = Math.abs(right)
+
+  while (b !== 0) {
+    const next = a % b
+    a = b
+    b = next
+  }
+
+  return a
+}
+
+function minimapShowsGraphicMapConnection(
+  lines: string[],
+  fromToken: MinimapRoomToken,
+  toToken: MinimapRoomToken,
+  direction: GraphicMapDirection,
+) {
+  const rowStart = Math.min(fromToken.row, toToken.row)
+  const rowEnd = Math.max(fromToken.row, toToken.row)
+  const columnStart = Math.min(fromToken.column, toToken.column)
+  const columnEnd = Math.max(fromToken.column, toToken.column)
+
+  switch (direction) {
+    case 'e': {
+      const segment = readMinimapSegment(lines, fromToken.row, fromToken.column + 3, toToken.column)
+      return /-/.test(segment)
+    }
+    case 's': {
+      const centerColumn = fromToken.column + 1
+      for (let row = fromToken.row + 1; row < toToken.row; row += 1) {
+        const segment = readMinimapSegment(lines, row, centerColumn - 1, centerColumn + 2)
+        if (/[|+]/.test(segment)) {
+          return true
+        }
+      }
+      return false
+    }
+    case 'se':
+      for (let row = rowStart + 1; row < rowEnd; row += 1) {
+        const segment = readMinimapSegment(lines, row, columnStart + 2, columnEnd + 1)
+        if (/\\/.test(segment)) {
+          return true
+        }
+      }
+      return false
+    case 'sw':
+      for (let row = rowStart + 1; row < rowEnd; row += 1) {
+        const segment = readMinimapSegment(lines, row, columnStart, columnEnd)
+        if (/\//.test(segment)) {
+          return true
+        }
+      }
+      return false
+    default:
+      return false
+  }
+}
+
+function readMinimapSegment(lines: string[], row: number, startColumn: number, endColumn: number) {
+  const line = lines[row] ?? ''
+  return line.slice(Math.max(0, startColumn), Math.max(startColumn, endColumn))
+}
+
+function getGraphicMapRoomKey(room: { x: number; y: number; v?: number }) {
+  return typeof room.v === 'number' ? `v:${room.v}` : `p:${room.x},${room.y}`
+}
+
+function getGraphicMapDirectionForOffset(offsetX: number, offsetY: number): GraphicMapDirection | null {
+  switch (`${offsetX},${offsetY}`) {
+    case '0,-1':
+      return 'n'
+    case '1,0':
+      return 'e'
+    case '0,1':
+      return 's'
+    case '-1,0':
+      return 'w'
+    case '-1,-1':
+      return 'nw'
+    case '1,-1':
+      return 'ne'
+    case '1,1':
+      return 'se'
+    case '-1,1':
+      return 'sw'
+    default:
+      return null
+  }
 }
 
 function clampGraphicMapRadius(radius?: number) {
   if (typeof radius !== 'number' || !Number.isFinite(radius)) {
-    return 8
+    return 6
   }
 
-  return Math.max(1, Math.min(16, Math.trunc(radius)))
+  return Math.max(1, Math.min(6, Math.trunc(radius)))
 }
 
 function getGraphicMapSectorColor(sector: number, isIndoors: boolean) {

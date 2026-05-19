@@ -17,6 +17,7 @@ export type GraphicMapRoom = {
   s?: number
   i?: number
   sp?: string
+  c?: number
 }
 
 export type GraphicMapData = {

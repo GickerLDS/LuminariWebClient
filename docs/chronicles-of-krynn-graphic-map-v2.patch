@@ -1,0 +1,129 @@
+diff --git a/src/comm.c b/src/comm.c
+--- a/src/comm.c
++++ b/src/comm.c
+@@
+ #define GRAPHIC_MAP_RADIUS 8
+ #define GRAPHIC_MAP_MAX_ROOMS \
+   (((GRAPHIC_MAP_RADIUS * 2) + 1) * ((GRAPHIC_MAP_RADIUS * 2) + 1))
++
++/* GRAPHIC_MAP room connector bits, ordered to match the web client:
++ *   bit 0: north
++ *   bit 1: east
++ *   bit 2: south
++ *   bit 3: west
++ *   bit 4: northwest
++ *   bit 5: northeast
++ *   bit 6: southeast
++ *   bit 7: southwest
++ */
++#define GRAPHIC_MAP_CONN_N  (1U << 0)
++#define GRAPHIC_MAP_CONN_E  (1U << 1)
++#define GRAPHIC_MAP_CONN_S  (1U << 2)
++#define GRAPHIC_MAP_CONN_W  (1U << 3)
++#define GRAPHIC_MAP_CONN_NW (1U << 4)
++#define GRAPHIC_MAP_CONN_NE (1U << 5)
++#define GRAPHIC_MAP_CONN_SE (1U << 6)
++#define GRAPHIC_MAP_CONN_SW (1U << 7)
+@@
+ static struct room_direction_data *graphic_map_visible_exit(struct char_data *ch, room_rnum room,
+                                                             int door)
+ {
+   struct room_direction_data *pexit;
+@@
+ 
+   return pexit;
+ }
++
++static unsigned int build_graphic_map_connections(struct char_data *ch,
++                                                  const struct graphic_map_room_data *rooms,
++                                                  int room_count,
++                                                  int room_index)
++{
++  static const int map_dirs[] = {NORTH, EAST, SOUTH, WEST, NORTHWEST,
++                                 NORTHEAST, SOUTHEAST, SOUTHWEST};
++  static const int map_offsets[][2] = {{0, -1}, {1, 0},  {0, 1},  {-1, 0},
++                                       {-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
++  static const unsigned int map_bits[] = {
++      GRAPHIC_MAP_CONN_N,
++      GRAPHIC_MAP_CONN_E,
++      GRAPHIC_MAP_CONN_S,
++      GRAPHIC_MAP_CONN_W,
++      GRAPHIC_MAP_CONN_NW,
++      GRAPHIC_MAP_CONN_NE,
++      GRAPHIC_MAP_CONN_SE,
++      GRAPHIC_MAP_CONN_SW,
++  };
++  unsigned int connections = 0;
++  int dir_index;
++
++  if (!ch || !rooms || room_index < 0 || room_index >= room_count)
++    return 0;
++
++  for (dir_index = 0; dir_index < (int)(sizeof(map_dirs) / sizeof(map_dirs[0])); dir_index++)
++  {
++    struct room_direction_data *pexit;
++    int next_x;
++    int next_y;
++    int target_index;
++
++    pexit = graphic_map_visible_exit(ch, rooms[room_index].room, map_dirs[dir_index]);
++    if (!pexit)
++      continue;
++
++    next_x = rooms[room_index].x + map_offsets[dir_index][0];
++    next_y = rooms[room_index].y + map_offsets[dir_index][1];
++
++    target_index = graphic_map_find_position(rooms, room_count, next_x, next_y);
++    if (target_index < 0)
++      continue;
++
++    if (rooms[target_index].room != pexit->to_room)
++      continue;
++
++    connections |= map_bits[dir_index];
++  }
++
++  return connections;
++}
+@@
+ static void update_msdp_graphic_map(struct descriptor_data *d, struct char_data *ch)
+ {
+   const char MsdpVar = (char)MSDP_VAR;
+   const char MsdpVal = (char)MSDP_VAL;
+@@
+   room_count = collect_graphic_map_rooms(ch, IN_ROOM(ch), rooms, GRAPHIC_MAP_MAX_ROOMS);
+ 
+-  graphic_map_buffer_appendf(&buffer, "%cver%c1%cradius%c%d%crooms%c%c", MsdpVar, MsdpVal,
++  graphic_map_buffer_appendf(&buffer, "%cver%c2%cradius%c%d%crooms%c%c", MsdpVar, MsdpVal,
+                              MsdpVar, MsdpVal, GRAPHIC_MAP_RADIUS, MsdpVar, MsdpVal,
+                              MsdpArrayOpen);
+ 
+   for (index = 0; index < room_count && !buffer.truncated; index++)
+   {
+     char specials[8] = {'\0'};
++    unsigned int connections;
+ 
+     build_graphic_map_specials(ch, rooms[index].room, specials, sizeof(specials));
++    connections = build_graphic_map_connections(ch, rooms, room_count, index);
+ 
+     graphic_map_buffer_appendf(&buffer,
+                                "%c%c"
+                                "%cx%c%d"
+                                "%cy%c%d"
+                                "%cv%c%d"
+                                "%cs%c%d"
+                                "%ci%c%d",
+                                MsdpVal, MsdpTableOpen, MsdpVar, MsdpVal, rooms[index].x, MsdpVar,
+                                MsdpVal, rooms[index].y, MsdpVar, MsdpVal,
+                                GET_ROOM_VNUM(rooms[index].room), MsdpVar, MsdpVal,
+                                world[rooms[index].room].sector_type, MsdpVar, MsdpVal,
+                                ROOM_FLAGGED(rooms[index].room, ROOM_INDOORS) ? 1 : 0);
++
++    if (connections)
++      graphic_map_buffer_appendf(&buffer, "%cc%c%u", MsdpVar, MsdpVal, connections);
+ 
+     if (*specials)
+       graphic_map_buffer_appendf(&buffer, "%csp%c%s", MsdpVar, MsdpVal, specials);
+ 
+     graphic_map_buffer_appendf(&buffer, "%c", MsdpTableClose);
+   }
