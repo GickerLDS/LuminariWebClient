@@ -26,6 +26,18 @@ export type GraphicMapData = {
   rooms?: GraphicMapRoom[]
 }
 
+export const WILDERNESS_ROOM_VNUM_START = 1000000
+export const WILDERNESS_ROOM_VNUM_END = 1009999
+
+export function isWildernessRoomVnum(roomVnum?: number) {
+  return (
+    typeof roomVnum === 'number' &&
+    Number.isFinite(roomVnum) &&
+    roomVnum >= WILDERNESS_ROOM_VNUM_START &&
+    roomVnum <= WILDERNESS_ROOM_VNUM_END
+  )
+}
+
 export interface MudState {
   characterName?: string
   title?: string
@@ -75,11 +87,12 @@ export interface MudState {
   automap?: string
   minimap?: string
   graphicMap?: GraphicMapData
+  wildernessGraphicMap?: GraphicMapData
   worldTime?: string
   actions?: MudValue
   affects?: MudValue
   group?: MudValue
-    questInfo?: MudValue
+  questInfo?: MudValue
   opponentName?: string
   opponentHealth?: number
   opponentHealthMax?: number
@@ -121,6 +134,7 @@ export const defaultMsdpVariables = {
   money: 'MONEY',
   minimap: 'MINIMAP',
   graphicMap: 'GRAPHIC_MAP',
+  wildernessGraphicMap: 'WILDERNESS_GRAPHIC_MAP',
   affects: 'AFFECTS',
   group: 'GROUP',
   questInfo: 'QUEST_INFO',
@@ -201,6 +215,10 @@ export function normalizeMsdpVariableMap(value: unknown): MsdpVariableMap {
     money: normalizeMsdpVariableValue(raw.money, defaultMsdpVariables.money),
     minimap: normalizeMsdpVariableValue(raw.minimap, defaultMsdpVariables.minimap),
     graphicMap: normalizeMsdpVariableValue(raw.graphicMap, defaultMsdpVariables.graphicMap),
+    wildernessGraphicMap: normalizeMsdpVariableValue(
+      raw.wildernessGraphicMap,
+      defaultMsdpVariables.wildernessGraphicMap,
+    ),
     affects: normalizeMsdpVariableValue(raw.affects, defaultMsdpVariables.affects),
     group: normalizeMsdpVariableValue(raw.group, defaultMsdpVariables.group),
     questInfo: normalizeMsdpVariableValue(raw.questInfo, defaultMsdpVariables.questInfo),
