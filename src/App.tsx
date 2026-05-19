@@ -25,7 +25,8 @@ import './App.css'
 const DEFAULT_HOST = appSettings.connection.defaultHost
 const DEFAULT_PORT = appSettings.connection.defaultPort
 const CUSTOM_MUD_VALUE = '__custom__'
-const TERMINAL_CHUNK_LIMIT = 500
+const DEFAULT_TERMINAL_HISTORY_LINES = 200
+const MAX_TERMINAL_HISTORY_LINES = 2000
 const COMMAND_HISTORY_LIMIT = 100
 const AUTOMATION_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 const AUTOMATION_COOKIE_CHUNK_SIZE = 3000
@@ -153,6 +154,7 @@ type ClientSettings = {
   terminal: {
     fontSize: number
     lineHeight: number
+    maxHistoryLines: number
     autoScroll: boolean
     wrapLines: boolean
   }
@@ -179,6 +181,7 @@ const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
   terminal: {
     fontSize: 14,
     lineHeight: 1.55,
+    maxHistoryLines: DEFAULT_TERMINAL_HISTORY_LINES,
     autoScroll: true,
     wrapLines: true,
   },
@@ -384,9 +387,7 @@ function App() {
   const [triggers, setTriggers] = useState<TriggerDefinition[]>(() => loadTriggersFromCookies())
   const [clientSettings, setClientSettings] = useState<ClientSettings>(() => loadClientSettingsFromCookies())
   const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null)
-  const [terminalChunks, setTerminalChunks] = useState<string[]>([
-    '<span class="terminal-muted">Connect to a LuminariMUD-compatible server to begin.</span>',
-  ])
+  const [terminalOutput, setTerminalOutput] = useState('Connect to a LuminariMUD-compatible server to begin.')
   const [proxyReady, setProxyReady] = useState(false)
   const [status, setStatus] = useState<ConnectionStatus>('idle')
   const [statusDetail, setStatusDetail] = useState('Awaiting connection.')
@@ -399,11 +400,11 @@ function App() {
   const commandInputRef = useRef<HTMLInputElement | null>(null)
   const configFileInputRef = useRef<HTMLInputElement | null>(null)
   const menuBarRef = useRef<HTMLDivElement | null>(null)
-  const ansiConverterRef = useRef(createAnsiConverter())
   const triggerBufferRef = useRef('')
   const statusRef = useRef<ConnectionStatus>('idle')
   const aliasesRef = useRef<AliasDefinition[]>(aliases)
   const triggersRef = useRef<TriggerDefinition[]>(triggers)
+  const terminalHistoryLineLimitRef = useRef(clientSettings.terminal.maxHistoryLines)
 
   useEffect(() => {
     document.title = uiSettings.personalization.browserTitle
@@ -426,6 +427,10 @@ function App() {
   useEffect(() => {
     saveClientSettingsToCookies(normalizeClientSettings(clientSettings))
   }, [clientSettings])
+
+  useEffect(() => {
+    terminalHistoryLineLimitRef.current = clientSettings.terminal.maxHistoryLines
+  }, [clientSettings.terminal.maxHistoryLines])
 
   useEffect(() => {
     if (!openAutomationMenu) {
@@ -575,11 +580,9 @@ function App() {
           dispatchInputText(triggerCommand, { rememberInHistory: false })
         }
 
-        const html = ansiConverterRef.current.toHtml(message.text)
-        setTerminalChunks((current) => {
-          const next = [...current, html]
-          return next.slice(-TERMINAL_CHUNK_LIMIT)
-        })
+        setTerminalOutput((current) =>
+          trimTerminalOutputLines(`${current}${normalizeTerminalText(message.text)}`, terminalHistoryLineLimitRef.current),
+        )
         return
       }
 
@@ -594,11 +597,8 @@ function App() {
         }
 
         if (message.status === 'connected') {
-          ansiConverterRef.current = createAnsiConverter()
           triggerBufferRef.current = ''
-          setTerminalChunks([
-            '<span class="terminal-muted">Connected. Waiting for room text and MSDP updates...</span>',
-          ])
+          setTerminalOutput('Connected. Waiting for room text and MSDP updates...')
         } else {
           triggerBufferRef.current = ''
         }
@@ -619,7 +619,7 @@ function App() {
     if (terminalRef.current && clientSettings.terminal.autoScroll) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
     }
-  }, [clientSettings.terminal.autoScroll, terminalChunks])
+  }, [clientSettings.terminal.autoScroll, terminalOutput])
 
   const bars = useMemo<BarConfig[]>(
     () => {
@@ -697,6 +697,7 @@ function App() {
     }),
     [clientSettings.terminal.fontSize, clientSettings.terminal.lineHeight, clientSettings.terminal.wrapLines],
   )
+  const terminalOutputHtml = useMemo(() => createAnsiConverter().toHtml(terminalOutput), [terminalOutput])
   const minimapStyle = useMemo<CSSProperties>(
     () => ({
       fontSize: `${clientSettings.minimap.fontSize}px`,
@@ -965,13 +966,27 @@ function App() {
   }
 
   function updateTerminalSettings(updates: Partial<ClientSettings['terminal']>) {
+    const normalizedUpdates = {
+      ...updates,
+      ...(updates.maxHistoryLines !== undefined
+        ? { maxHistoryLines: clampTerminalHistoryLines(updates.maxHistoryLines) }
+        : {}),
+    }
+
     setClientSettings((current) => ({
       ...current,
       terminal: {
         ...current.terminal,
-        ...updates,
+        ...normalizedUpdates,
       },
     }))
+
+    if (normalizedUpdates.maxHistoryLines !== undefined) {
+      const maxHistoryLines = normalizedUpdates.maxHistoryLines
+      terminalHistoryLineLimitRef.current = maxHistoryLines
+      setTerminalOutput((current) => trimTerminalOutputLines(current, maxHistoryLines))
+    }
+
     setAutomationNotice(null)
   }
 
@@ -1036,6 +1051,8 @@ function App() {
     try {
       const importedConfig = parseClientConfigImport(await file.text(), clientSettings, aliases, triggers)
       setClientSettings(importedConfig.settings)
+      terminalHistoryLineLimitRef.current = importedConfig.settings.terminal.maxHistoryLines
+      setTerminalOutput((current) => trimTerminalOutputLines(current, importedConfig.settings.terminal.maxHistoryLines))
       setActiveMapTab(getDefaultMapPanelTab(importedConfig.settings))
       setAliases(importedConfig.aliases)
       setTriggers(importedConfig.triggers)
@@ -1348,6 +1365,24 @@ function App() {
                         </label>
 
                         <label>
+                          <span>History lines</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={MAX_TERMINAL_HISTORY_LINES}
+                            step={1}
+                            inputMode="numeric"
+                            value={clientSettings.terminal.maxHistoryLines}
+                            onChange={(event) => {
+                              const nextValue = parsePositiveIntegerInput(event.target.value)
+                              if (nextValue !== null) {
+                                updateTerminalSettings({ maxHistoryLines: clampTerminalHistoryLines(nextValue) })
+                              }
+                            }}
+                          />
+                        </label>
+
+                        <label>
                           <span>Line spacing</span>
                           <select
                             value={String(clientSettings.terminal.lineHeight)}
@@ -1574,7 +1609,7 @@ function App() {
             data-prevent-command-focus
             onClick={handleTerminalClick}
             style={terminalOutputStyle}
-            dangerouslySetInnerHTML={{ __html: terminalChunks.join('') }}
+            dangerouslySetInnerHTML={{ __html: terminalOutputHtml }}
           />
 
           <div className="bars">
@@ -2184,6 +2219,10 @@ function normalizeClientSettings(value: unknown, emptyStateMessage?: string): Cl
         2.2,
         DEFAULT_CLIENT_SETTINGS.terminal.lineHeight,
       ),
+      maxHistoryLines: clampTerminalHistoryLines(
+        readNumericSetting(terminalRecord.maxHistoryLines),
+        DEFAULT_CLIENT_SETTINGS.terminal.maxHistoryLines,
+      ),
       autoScroll:
         typeof terminalRecord.autoScroll === 'boolean'
           ? terminalRecord.autoScroll
@@ -2311,6 +2350,30 @@ function clampNumber(value: number | undefined, minimum: number, maximum: number
   }
 
   return Math.min(Math.max(value, minimum), maximum)
+}
+
+function clampTerminalHistoryLines(value: number | undefined, fallback = DEFAULT_TERMINAL_HISTORY_LINES) {
+  if (value === undefined || !Number.isFinite(value)) {
+    return fallback
+  }
+
+  return Math.max(1, Math.min(MAX_TERMINAL_HISTORY_LINES, Math.trunc(value)))
+}
+
+function normalizeTerminalText(value: string) {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+}
+
+function trimTerminalOutputLines(value: string, maxHistoryLines: number) {
+  const normalizedValue = normalizeTerminalText(value)
+  const lineLimit = clampTerminalHistoryLines(maxHistoryLines)
+  const lines = normalizedValue.split('\n')
+
+  if (lines.length <= lineLimit) {
+    return normalizedValue
+  }
+
+  return lines.slice(-lineLimit).join('\n')
 }
 
 function parsePositiveIntegerInput(value: string) {
