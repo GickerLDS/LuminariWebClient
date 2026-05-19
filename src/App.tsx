@@ -3812,10 +3812,10 @@ function getGraphicMapDirectionForOffset(offsetX: number, offsetY: number): Grap
 
 function clampGraphicMapRadius(radius?: number) {
   if (typeof radius !== 'number' || !Number.isFinite(radius)) {
-    return 6
+    return 8
   }
 
-  return Math.max(1, Math.min(6, Math.trunc(radius)))
+  return Math.max(1, Math.min(8, Math.trunc(radius)))
 }
 
 function getGraphicMapSectorColor(sector: number, isIndoors: boolean) {

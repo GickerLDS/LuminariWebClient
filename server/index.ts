@@ -227,7 +227,6 @@ class MudSession {
     }
 
     this.mudSocket.write(text.endsWith('\n') ? text : `${text}\n`)
-    this.requestStateRefresh()
 
     if (isMovementCommandInput(text)) {
       this.requestMovementMapRefresh()
@@ -281,8 +280,6 @@ class MudSession {
       return
     }
 
-    this.sendMapRefreshRequest()
-
     if (this.movementMapRefreshTimer) {
       clearTimeout(this.movementMapRefreshTimer)
     }
@@ -299,9 +296,6 @@ class MudSession {
     }
 
     const mapVariables = new Set([
-      'GRAPHIC_MAP',
-      'MINIMAP',
-      'AUTOMAP',
       this.msdpVariables.graphicMap.trim(),
       this.msdpVariables.minimap.trim(),
     ])
