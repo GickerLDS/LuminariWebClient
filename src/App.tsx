@@ -735,7 +735,7 @@ function App() {
     [isWildernessRoom, mudState.graphicMap, mudState.wildernessGraphicMap],
   )
   const graphicMap = useMemo(
-    () => buildGraphicMap(activeGraphicMapData, isWildernessRoom ? undefined : mudState.minimap),
+    () => buildGraphicMap(activeGraphicMapData, isWildernessRoom ? undefined : mudState.minimap, isWildernessRoom),
     [activeGraphicMapData, isWildernessRoom, mudState.minimap],
   )
   const activeMapPanel = useMemo(
@@ -1800,7 +1800,11 @@ function App() {
                           {cell.kind === 'room' && cell.markers.length > 0 ? (
                             <div className="graphic-map-markers" aria-hidden="true">
                               {cell.markers.map((marker) => (
-                                <span key={marker.id} className="graphic-map-marker" title={marker.label}>
+                                <span
+                                  key={marker.id}
+                                  className={marker.className ? `graphic-map-marker ${marker.className}` : 'graphic-map-marker'}
+                                  title={marker.label}
+                                >
                                   {marker.icon}
                                 </span>
                               ))}
@@ -1973,7 +1977,7 @@ function App() {
               ) : null}
 
               {activeSidebarTab === 'affects' ? (
-                <MudValuePanel value={mudState.affects} emptyMessage="No affects reported yet." />
+                <AffectsPanel value={mudState.affects} />
               ) : null}
             </div>
           </section>
@@ -2763,6 +2767,68 @@ function EmptyTabMessage({ message }: { message: string }) {
   return <p className="tab-empty-message">{message}</p>
 }
 
+type AffectsPanelProps = {
+  value?: MudValue
+}
+
+type AffectEntry = {
+  nameText: string
+  isNameMissing: boolean
+  durationText?: string
+  detailText?: string
+  rawText?: string
+  unknownFieldsText?: string
+}
+
+function AffectsPanel({ value }: AffectsPanelProps) {
+  if (value === undefined || value === null) {
+    return <EmptyTabMessage message="No affects reported yet." />
+  }
+
+  const affects = parseAffectEntries(value)
+
+  if (affects.length === 0) {
+    return <MudValuePanel value={value} emptyMessage="No affects reported yet." />
+  }
+
+  return (
+    <div className="affects-panel" role="list" aria-label="Active affects">
+      {affects.map((affect, index) => (
+        <AffectRow key={`${affect.nameText || 'affect'}-${index}`} affect={affect} />
+      ))}
+    </div>
+  )
+}
+
+function AffectRow({ affect }: { affect: AffectEntry }) {
+  const className = [
+    'affect-card',
+    affect.isNameMissing ? 'affect-card-missing-name' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <article className={className} role="listitem">
+      <div className="affect-card-header">
+        <span className="affect-card-name">{affect.nameText}</span>
+        {affect.durationText ? <span className="affect-duration-badge">{affect.durationText}</span> : null}
+      </div>
+
+      {affect.detailText ? (
+        <div className="affect-detail-line">
+          <span>Details</span>
+          <strong>{affect.detailText}</strong>
+        </div>
+      ) : null}
+
+      {affect.rawText ? <p className="affect-raw-text">{affect.rawText}</p> : null}
+
+      {affect.unknownFieldsText ? <p className="affect-unknown-fields">Other: {affect.unknownFieldsText}</p> : null}
+    </article>
+  )
+}
+
 type GroupPanelProps = {
   value: MudValue
 }
@@ -2949,6 +3015,216 @@ function parseGroupMembers(value: MudValue): GroupMember[] {
     })
 }
 
+function parseAffectEntries(value: MudValue): AffectEntry[] {
+  if (value === undefined || value === null) {
+    return []
+  }
+
+  if (typeof value === 'string') {
+    return buildAffectEntriesFromText(value)
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    const text = formatMudValueAsText(value)
+    return text ? [{ nameText: text, isNameMissing: false }] : []
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap<AffectEntry>((entry) => parseAffectEntries(entry))
+  }
+
+  if (isSingleAffectRecord(value)) {
+    const affect = parseAffectRecord(value)
+    return affect ? [affect] : []
+  }
+
+  return Object.entries(value).flatMap<AffectEntry>(([key, entry]) => parseAffectValueEntry(entry, key))
+}
+
+function parseAffectValueEntry(value: MudValue, fallbackName?: string): AffectEntry[] {
+  if (value === undefined || value === null) {
+    return []
+  }
+
+  if (typeof value === 'string') {
+    return buildAffectEntriesFromText(value, fallbackName)
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    const text = formatMudValueAsText(value)
+    const label = formatAffectFallbackName(fallbackName)
+    if (!text) {
+      return []
+    }
+
+    return [
+      {
+        nameText: label ?? text,
+        isNameMissing: !label,
+        detailText: label ? text : undefined,
+      },
+    ]
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap<AffectEntry>((entry) => parseAffectValueEntry(entry, fallbackName))
+  }
+
+  if (!isMudRecord(value)) {
+    return []
+  }
+
+  if (isSingleAffectRecord(value)) {
+    const affect = parseAffectRecord(value, fallbackName)
+    return affect ? [affect] : []
+  }
+
+  return Object.entries(value).flatMap<AffectEntry>(([key, entry]) => parseAffectValueEntry(entry, key))
+}
+
+function parseAffectRecord(record: Record<string, MudValue>, fallbackName?: string): AffectEntry | null {
+  const name =
+    asOptionalText(
+      readAnyKey(record, ['name', 'NAME', 'affect', 'AFFECT', 'effect', 'EFFECT', 'spell', 'SPELL', 'type', 'TYPE']),
+    ) ?? formatAffectFallbackName(fallbackName)
+  const duration = asOptionalText(
+    readAnyKey(record, ['duration', 'DURATION', 'remaining', 'REMAINING', 'time', 'TIME', 'timer', 'TIMER', 'ticks', 'TICKS']),
+  )
+  const modifier = asOptionalText(
+    readAnyKey(record, ['modifier', 'MODIFIER', 'mod', 'MOD', 'amount', 'AMOUNT', 'value', 'VALUE']),
+  )
+  const location = asOptionalText(
+    readAnyKey(record, ['location', 'LOCATION', 'apply', 'APPLY', 'stat', 'STAT', 'where', 'WHERE', 'target', 'TARGET']),
+  )
+  const status = asOptionalText(readAnyKey(record, ['status', 'STATUS', 'state', 'STATE']))
+  const rawText = asOptionalText(readAnyKey(record, ['raw', 'RAW', 'raw_text', 'RAW_TEXT', 'text', 'TEXT']))
+  const detailText = formatAffectDetail(status, location, modifier)
+  const unknownFieldsText = formatUnknownAffectFields(record)
+
+  if (!name && !duration && !detailText && !rawText && !unknownFieldsText) {
+    return null
+  }
+
+  return {
+    nameText: name ?? 'Unknown effect',
+    isNameMissing: !name,
+    durationText: duration,
+    detailText,
+    rawText,
+    unknownFieldsText,
+  }
+}
+
+function buildAffectEntriesFromText(value: string, fallbackName?: string): AffectEntry[] {
+  const entries = splitAffectTextEntries(value)
+  if (entries.length === 0) {
+    return []
+  }
+
+  const fallbackLabel = formatAffectFallbackName(fallbackName)
+  if (fallbackLabel && entries.length === 1) {
+    return [
+      {
+        nameText: fallbackLabel,
+        isNameMissing: false,
+        detailText: entries[0],
+      },
+    ]
+  }
+
+  return entries.map((entry) => ({
+    nameText: entry,
+    isNameMissing: false,
+  }))
+}
+
+function splitAffectTextEntries(value: string) {
+  const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+  if (!normalized) {
+    return []
+  }
+
+  const primaryParts = normalized
+    .split(/\n+|\s*\|\s*|\s*;\s*/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+  if (primaryParts.length > 1) {
+    return primaryParts
+  }
+
+  const commaParts = normalized
+    .split(/\s*,\s*/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+  return commaParts.length > 1 ? commaParts : [normalized]
+}
+
+function isSingleAffectRecord(record: Record<string, MudValue>) {
+  return Object.keys(record).some((key) =>
+    new Set([
+      'name',
+      'NAME',
+      'affect',
+      'AFFECT',
+      'effect',
+      'EFFECT',
+      'spell',
+      'SPELL',
+      'type',
+      'TYPE',
+      'duration',
+      'DURATION',
+      'remaining',
+      'REMAINING',
+      'time',
+      'TIME',
+      'timer',
+      'TIMER',
+      'ticks',
+      'TICKS',
+      'modifier',
+      'MODIFIER',
+      'mod',
+      'MOD',
+      'amount',
+      'AMOUNT',
+      'value',
+      'VALUE',
+      'location',
+      'LOCATION',
+      'apply',
+      'APPLY',
+      'stat',
+      'STAT',
+      'where',
+      'WHERE',
+      'target',
+      'TARGET',
+      'status',
+      'STATUS',
+      'state',
+      'STATE',
+      'raw',
+      'RAW',
+      'raw_text',
+      'RAW_TEXT',
+      'text',
+      'TEXT',
+    ]).has(key),
+  )
+}
+
+function formatAffectFallbackName(value?: string) {
+  const normalized = value?.trim()
+  if (!normalized || /^\d+$/.test(normalized) || /^affect[_-]?\d*$/i.test(normalized)) {
+    return undefined
+  }
+
+  return formatMudLabel(normalized)
+}
+
 function buildHudBar({
   id,
   status,
@@ -3080,6 +3356,82 @@ function formatUnknownGroupFields(record: Record<string, MudValue>) {
     'RAW',
     'raw_text',
     'RAW_TEXT',
+  ])
+
+  const entries = Object.entries(record)
+    .map(([key, entryValue]) => {
+      if (ignoredKeys.has(key)) {
+        return null
+      }
+
+      const formattedValue = formatMudValueAsText(entryValue)
+      return formattedValue ? `${formatMudLabel(key)}: ${formattedValue}` : null
+    })
+    .filter((entry): entry is string => Boolean(entry))
+
+  return entries.length > 0 ? entries.join(' | ') : undefined
+}
+
+function formatAffectDetail(status?: string, location?: string, modifier?: string) {
+  const locationText =
+    location && modifier
+      ? `${location}: ${modifier}`
+      : location || modifier
+
+  const detailParts = [status, locationText].filter((part): part is string => Boolean(part))
+  return detailParts.length > 0 ? detailParts.join(' · ') : undefined
+}
+
+function formatUnknownAffectFields(record: Record<string, MudValue>) {
+  const ignoredKeys = new Set([
+    'name',
+    'NAME',
+    'affect',
+    'AFFECT',
+    'effect',
+    'EFFECT',
+    'spell',
+    'SPELL',
+    'type',
+    'TYPE',
+    'duration',
+    'DURATION',
+    'remaining',
+    'REMAINING',
+    'time',
+    'TIME',
+    'timer',
+    'TIMER',
+    'ticks',
+    'TICKS',
+    'modifier',
+    'MODIFIER',
+    'mod',
+    'MOD',
+    'amount',
+    'AMOUNT',
+    'value',
+    'VALUE',
+    'location',
+    'LOCATION',
+    'apply',
+    'APPLY',
+    'stat',
+    'STAT',
+    'where',
+    'WHERE',
+    'target',
+    'TARGET',
+    'status',
+    'STATUS',
+    'state',
+    'STATE',
+    'raw',
+    'RAW',
+    'raw_text',
+    'RAW_TEXT',
+    'text',
+    'TEXT',
   ])
 
   const entries = Object.entries(record)
@@ -3464,6 +3816,7 @@ type GraphicMapRoomCell = {
     id: string
     icon: string
     label: string
+    className?: string
   }>
 }
 
@@ -3501,10 +3854,10 @@ const GRAPHIC_MAP_SECTOR_COLORS: Record<number, string> = {
   7: '#0f766e',
   8: '#0369a1',
   9: '#b45309',
-  10: '#1e293b',
-  11: '#0f766e',
-  12: '#0f766e',
-  13: '#0f766e',
+  10: '#dc2626',
+  11: '#d1d5db',
+  12: '#d1d5db',
+  13: '#d1d5db',
   14: '#0f766e',
   15: '#155e75',
   16: '#3b82f6',
@@ -3515,10 +3868,10 @@ const GRAPHIC_MAP_SECTOR_COLORS: Record<number, string> = {
   21: '#4d7c0f',
   22: '#dc2626',
   23: '#475569',
-  24: '#7c2d12',
+  24: '#dc2626',
   25: '#c2410c',
   26: '#b91c1c',
-  27: '#1d4ed8',
+  27: '#d2b48c',
   28: '#a3a3a3',
   29: '#f8fafc',
   30: '#64748b',
@@ -3531,14 +3884,14 @@ const GRAPHIC_MAP_SECTOR_COLORS: Record<number, string> = {
 }
 
 const GRAPHIC_MAP_DEFAULT_TILE_COLOR = '#111827'
-const GRAPHIC_MAP_MARKER_ICONS: Record<string, { icon: string; label: string }> = {
+const GRAPHIC_MAP_MARKER_ICONS: Record<string, { icon: string; label: string; className?: string }> = {
   u: { icon: '↑', label: 'Up exit' },
   d: { icon: '↓', label: 'Down exit' },
-  i: { icon: '🚪↘', label: 'Inside exit' },
-  o: { icon: '🚪↗', label: 'Outside exit' },
+  i: { icon: '🚪↘', label: 'Inside exit', className: 'graphic-map-marker-entrance' },
+  o: { icon: '🚪↗', label: 'Outside exit', className: 'graphic-map-marker-entrance' },
 }
 
-function buildGraphicMap(graphicMap?: GraphicMapData, minimap?: string): BuiltGraphicMap | null {
+function buildGraphicMap(graphicMap?: GraphicMapData, minimap?: string, rotate180 = false): BuiltGraphicMap | null {
   if (!graphicMap?.rooms?.length) {
     return null
   }
@@ -3549,7 +3902,17 @@ function buildGraphicMap(graphicMap?: GraphicMapData, minimap?: string): BuiltGr
   }
 
   const radius = clampGraphicMapRadius(graphicMap.radius)
-  const boundedRooms = validRooms.filter((room) => Math.abs(room.x) <= radius && Math.abs(room.y) <= radius)
+  const boundedRooms = validRooms
+    .filter((room) => Math.abs(room.x) <= radius && Math.abs(room.y) <= radius)
+    .map((room) =>
+      rotate180
+        ? {
+            ...room,
+            x: -room.x,
+            y: -room.y,
+          }
+        : room,
+    )
   if (boundedRooms.length === 0) {
     return null
   }
@@ -3570,9 +3933,10 @@ function buildGraphicMap(graphicMap?: GraphicMapData, minimap?: string): BuiltGr
   for (let gridY = 0; gridY < height; gridY += 1) {
     for (let gridX = 0; gridX < width; gridX += 1) {
       const key = `${gridX},${gridY}`
-      const roomX = Math.floor(gridX / 2) - radius
+      const lookupGridX = rotate180 ? width - 1 - gridX : gridX
+      const roomX = Math.floor(lookupGridX / 2) - radius
       const roomY = Math.floor(gridY / 2) - radius
-      const isRoomColumn = gridX % 2 === 0
+      const isRoomColumn = lookupGridX % 2 === 0
       const isRoomRow = gridY % 2 === 0
 
       if (isRoomColumn && isRoomRow) {
@@ -4099,9 +4463,10 @@ function getGraphicMapMarkers(specials?: string) {
         id: `${special}-${index}`,
         icon: marker.icon,
         label: marker.label,
+        ...(marker.className ? { className: marker.className } : {}),
       }
     })
-    .filter((marker): marker is { id: string; icon: string; label: string } => marker !== null)
+    .filter((marker) => marker !== null)
 }
 
 function findMatchingMudPresetId(mudPresets: AppSettings['connection']['muds'], host: string, port: number) {
