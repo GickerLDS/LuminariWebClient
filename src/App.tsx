@@ -152,6 +152,12 @@ type TriggerDefinition = {
 type SidebarFontFamily = 'sans' | 'mono' | 'serif'
 
 type ClientSettings = {
+  connection: {
+    defaultMudId: string
+    customMudName: string
+    customHost: string
+    customPort: number
+  }
   terminal: {
     fontSize: number
     lineHeight: number
@@ -179,6 +185,12 @@ type AutomationNotice = {
 type AutomationMenuId = 'aliases' | 'triggers' | 'msdpVars' | 'settings'
 
 const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
+  connection: {
+    defaultMudId: findMatchingMudPresetId(appSettings.connection.muds, DEFAULT_HOST, DEFAULT_PORT) ?? CUSTOM_MUD_VALUE,
+    customMudName: '',
+    customHost: DEFAULT_HOST,
+    customPort: DEFAULT_PORT,
+  },
   terminal: {
     fontSize: 14,
     lineHeight: 1.55,
@@ -374,20 +386,20 @@ const ASCII_MAP_LEGEND_ITEMS: MapLegendItem[] = [
 ]
 
 function App() {
+  const initialClientSettings = loadClientSettingsFromCookies()
+  const initialConnectionDefaults = resolveConnectionDefaults(appSettings, initialClientSettings)
   const [uiSettings, setUiSettings] = useState<AppSettings>(appSettings)
   const [mudState, setMudState] = useState<MudState>({})
-  const [host, setHost] = useState(DEFAULT_HOST)
-  const [port, setPort] = useState(DEFAULT_PORT)
-  const [selectedMudId, setSelectedMudId] = useState(
-    findMatchingMudPresetId(appSettings.connection.muds, DEFAULT_HOST, DEFAULT_PORT) ?? CUSTOM_MUD_VALUE,
-  )
+  const [host, setHost] = useState(initialConnectionDefaults.host)
+  const [port, setPort] = useState(initialConnectionDefaults.port)
+  const [selectedMudId, setSelectedMudId] = useState(initialConnectionDefaults.selectedMudId)
   const [command, setCommand] = useState('')
   const [commandHistory, setCommandHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const [historyDraft, setHistoryDraft] = useState('')
   const [aliases, setAliases] = useState<AliasDefinition[]>(() => loadAliasesFromCookies())
   const [triggers, setTriggers] = useState<TriggerDefinition[]>(() => loadTriggersFromCookies())
-  const [clientSettings, setClientSettings] = useState<ClientSettings>(() => loadClientSettingsFromCookies())
+  const [clientSettings, setClientSettings] = useState<ClientSettings>(initialClientSettings)
   const [automationNotice, setAutomationNotice] = useState<AutomationNotice | null>(null)
   const [terminalOutput, setTerminalOutput] = useState('Connect to a LuminariMUD-compatible server to begin.')
   const [proxyReady, setProxyReady] = useState(false)
@@ -406,6 +418,7 @@ function App() {
   const statusRef = useRef<ConnectionStatus>('idle')
   const aliasesRef = useRef<AliasDefinition[]>(aliases)
   const triggersRef = useRef<TriggerDefinition[]>(triggers)
+  const clientSettingsRef = useRef(clientSettings)
   const terminalHistoryLineLimitRef = useRef(clientSettings.terminal.maxHistoryLines)
 
   useEffect(() => {
@@ -425,6 +438,10 @@ function App() {
     triggersRef.current = triggers
     saveTriggersToCookies(triggers)
   }, [triggers])
+
+  useEffect(() => {
+    clientSettingsRef.current = clientSettings
+  }, [clientSettings])
 
   useEffect(() => {
     saveClientSettingsToCookies(normalizeClientSettings(clientSettings))
@@ -477,15 +494,10 @@ function App() {
         }
 
         setUiSettings(settings)
-        setHost(settings.connection.defaultHost)
-        setPort(settings.connection.defaultPort)
-        setSelectedMudId(
-          findMatchingMudPresetId(
-            settings.connection.muds,
-            settings.connection.defaultHost,
-            settings.connection.defaultPort,
-          ) ?? CUSTOM_MUD_VALUE,
-        )
+        const connectionDefaults = resolveConnectionDefaults(settings, clientSettingsRef.current)
+        setHost(connectionDefaults.host)
+        setPort(connectionDefaults.port)
+        setSelectedMudId(connectionDefaults.selectedMudId)
       } catch (error) {
         console.error('Failed to load app settings from /api/settings', error)
       }
@@ -719,7 +731,7 @@ function App() {
   const asciiMapOutput = useMemo(() => buildAsciiMapOutput(mudState.minimap), [mudState.minimap])
   const isWildernessRoom = useMemo(() => isWildernessRoomVnum(mudState.roomVnum), [mudState.roomVnum])
   const activeGraphicMapData = useMemo(
-    () => (isWildernessRoom ? mudState.wildernessGraphicMap : mudState.graphicMap),
+    () => (isWildernessRoom ? mudState.wildernessGraphicMap ?? mudState.graphicMap : mudState.graphicMap),
     [isWildernessRoom, mudState.graphicMap, mudState.wildernessGraphicMap],
   )
   const graphicMap = useMemo(
@@ -1025,6 +1037,24 @@ function App() {
     setAutomationNotice(null)
   }
 
+  function updateConnectionSettings(updates: Partial<ClientSettings['connection']>) {
+    setClientSettings((current) => {
+      const nextSettings = normalizeClientSettings({
+        ...current,
+        connection: {
+          ...current.connection,
+          ...updates,
+        },
+      })
+      const connectionDefaults = resolveConnectionDefaults(uiSettings, nextSettings)
+      setHost(connectionDefaults.host)
+      setPort(connectionDefaults.port)
+      setSelectedMudId(connectionDefaults.selectedMudId)
+      return nextSettings
+    })
+    setAutomationNotice(null)
+  }
+
   function updateMsdpVariable(key: MsdpVariableKey, nextValue: string) {
     setClientSettings((current) => ({
       ...current,
@@ -1061,6 +1091,10 @@ function App() {
     try {
       const importedConfig = parseClientConfigImport(await file.text(), clientSettings, aliases, triggers)
       setClientSettings(importedConfig.settings)
+      const connectionDefaults = resolveConnectionDefaults(uiSettings, importedConfig.settings)
+      setHost(connectionDefaults.host)
+      setPort(connectionDefaults.port)
+      setSelectedMudId(connectionDefaults.selectedMudId)
       terminalHistoryLineLimitRef.current = importedConfig.settings.terminal.maxHistoryLines
       setTerminalOutput((current) => trimTerminalOutputLines(current, importedConfig.settings.terminal.maxHistoryLines))
       setActiveMapTab(getDefaultMapPanelTab(importedConfig.settings))
@@ -1353,6 +1387,70 @@ function App() {
                   <div className="settings-list">
                     <section className="settings-group">
                       <div className="settings-group-header">
+                        <h4>Connection defaults</h4>
+                        <p>Choose the MUD selected on load, or save a named custom host and port.</p>
+                      </div>
+
+                      <div className="settings-fields">
+                        <label>
+                          <span>Default MUD</span>
+                          <select
+                            value={clientSettings.connection.defaultMudId}
+                            onChange={(event) => updateConnectionSettings({ defaultMudId: event.target.value })}
+                          >
+                            {uiSettings.connection.muds.map((mud) => (
+                              <option key={mud.id} value={mud.id}>
+                                {mud.name}
+                              </option>
+                            ))}
+                            <option value={CUSTOM_MUD_VALUE}>{getCustomMudOptionLabel(clientSettings)}</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      {clientSettings.connection.defaultMudId === CUSTOM_MUD_VALUE ? (
+                        <div className="settings-fields">
+                          <label>
+                            <span>Custom MUD name</span>
+                            <input
+                              value={clientSettings.connection.customMudName}
+                              onChange={(event) => updateConnectionSettings({ customMudName: event.target.value })}
+                              placeholder="My MUD"
+                            />
+                          </label>
+
+                          <label>
+                            <span>Custom host</span>
+                            <input
+                              value={clientSettings.connection.customHost}
+                              onChange={(event) => updateConnectionSettings({ customHost: event.target.value })}
+                              placeholder={DEFAULT_HOST}
+                            />
+                          </label>
+
+                          <label>
+                            <span>Custom port</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              step={1}
+                              inputMode="numeric"
+                              value={clientSettings.connection.customPort}
+                              onChange={(event) => {
+                                const nextValue = parsePositiveIntegerInput(event.target.value)
+                                if (nextValue !== null) {
+                                  updateConnectionSettings({ customPort: nextValue })
+                                }
+                              }}
+                            />
+                          </label>
+                        </div>
+                      ) : null}
+                    </section>
+
+                    <section className="settings-group">
+                      <div className="settings-group-header">
                         <h4>Output window</h4>
                         <p>Fine-tune readability and scrolling in the main MUD output pane.</p>
                       </div>
@@ -1576,7 +1674,7 @@ function App() {
                         {mud.name}
                       </option>
                     ))}
-                    <option value={CUSTOM_MUD_VALUE}>Custom</option>
+                    <option value={CUSTOM_MUD_VALUE}>{getCustomMudOptionLabel(clientSettings)}</option>
                   </select>
                   {selectedMudPreset?.description ? (
                     <small className="connection-form-help">{selectedMudPreset.description}</small>
@@ -2207,6 +2305,7 @@ function normalizeClientSettings(value: unknown, emptyStateMessage?: string): Cl
   }
 
   const record = value as Record<string, unknown>
+  const connectionRecord = isObjectRecord(record.connection) ? record.connection : null
   const terminalValue = record.terminal
   if (!terminalValue || typeof terminalValue !== 'object' || Array.isArray(terminalValue)) {
     if (emptyStateMessage) {
@@ -2221,6 +2320,12 @@ function normalizeClientSettings(value: unknown, emptyStateMessage?: string): Cl
   const sidebarRecord = isObjectRecord(record.sidebar) ? record.sidebar : null
 
   return {
+    connection: {
+      defaultMudId: normalizeDefaultMudId(readOptionalString(connectionRecord ?? {}, ['defaultMudId'])),
+      customMudName: readOptionalString(connectionRecord ?? {}, ['customMudName'])?.trim() ?? '',
+      customHost: normalizeMudHost(readOptionalString(connectionRecord ?? {}, ['customHost'])),
+      customPort: normalizeMudPort(readNumericSetting(connectionRecord?.customPort)),
+    },
     terminal: {
       fontSize: clampNumber(readNumericSetting(terminalRecord.fontSize), 10, 32, DEFAULT_CLIENT_SETTINGS.terminal.fontSize),
       lineHeight: clampNumber(
@@ -2405,6 +2510,60 @@ function isSidebarFontFamily(value: unknown): value is SidebarFontFamily {
 
 function isDefaultMapType(value: unknown): value is DefaultMapType {
   return value === 'graphic' || value === 'ascii'
+}
+
+function normalizeDefaultMudId(value: string | undefined) {
+  const normalized = value?.trim()
+  return normalized ? normalized : DEFAULT_CLIENT_SETTINGS.connection.defaultMudId
+}
+
+function normalizeMudHost(value: string | undefined) {
+  const normalized = value?.trim()
+  return normalized ? normalized : DEFAULT_CLIENT_SETTINGS.connection.customHost
+}
+
+function normalizeMudPort(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_CLIENT_SETTINGS.connection.customPort
+  }
+
+  return Math.max(1, Math.min(65535, Math.trunc(value)))
+}
+
+function resolveConnectionDefaults(settings: AppSettings, clientSettings: ClientSettings) {
+  if (clientSettings.connection.defaultMudId === CUSTOM_MUD_VALUE) {
+    return {
+      selectedMudId: CUSTOM_MUD_VALUE,
+      host: normalizeMudHost(clientSettings.connection.customHost),
+      port: normalizeMudPort(clientSettings.connection.customPort),
+    }
+  }
+
+  const preset = settings.connection.muds.find((mud) => mud.id === clientSettings.connection.defaultMudId)
+  if (preset) {
+    return {
+      selectedMudId: preset.id,
+      host: preset.host,
+      port: preset.port,
+    }
+  }
+
+  const matchingPresetId = findMatchingMudPresetId(
+    settings.connection.muds,
+    settings.connection.defaultHost,
+    settings.connection.defaultPort,
+  )
+
+  return {
+    selectedMudId: matchingPresetId ?? CUSTOM_MUD_VALUE,
+    host: settings.connection.defaultHost,
+    port: settings.connection.defaultPort,
+  }
+}
+
+function getCustomMudOptionLabel(settings: ClientSettings) {
+  const name = settings.connection.customMudName.trim()
+  return name.length > 0 ? name : 'Custom'
 }
 
 function getDefaultMapPanelTab(settings: ClientSettings): MapPanelTabId {

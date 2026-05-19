@@ -336,8 +336,10 @@ class MudSession {
     }
 
     const nextPartial = { ...partial }
+    const hasGraphicMapUpdate = Object.prototype.hasOwnProperty.call(partial, 'graphicMap')
+    const hasWildernessGraphicMapUpdate = Object.prototype.hasOwnProperty.call(partial, 'wildernessGraphicMap')
 
-    if (!isWildernessRoomVnum(partial.roomVnum) && !partial.graphicMap && this.state.graphicMap) {
+    if (!isWildernessRoomVnum(partial.roomVnum) && !hasGraphicMapUpdate && this.state.graphicMap) {
       const graphicMap = recenterGraphicMapData(this.state.graphicMap, partial.roomVnum)
       if (graphicMap) {
         nextPartial.graphicMap = graphicMap
@@ -346,7 +348,7 @@ class MudSession {
 
     if (
       isWildernessRoomVnum(partial.roomVnum) &&
-      !partial.wildernessGraphicMap &&
+      !hasWildernessGraphicMapUpdate &&
       this.state.wildernessGraphicMap
     ) {
       const wildernessGraphicMap = recenterGraphicMapData(this.state.wildernessGraphicMap, partial.roomVnum)
