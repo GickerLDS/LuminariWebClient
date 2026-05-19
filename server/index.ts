@@ -57,7 +57,7 @@ const CONTROL_BYTES = new Set([
   MSDP_ARRAY_OPEN,
   MSDP_ARRAY_CLOSE,
 ])
-const REQUIRED_MSDP_VARIABLES = ['ROOM']
+const REQUIRED_MSDP_VARIABLES = ['ROOM', 'ROOM_VNUM', 'MINIMAP', 'AUTOMAP', 'GRAPHIC_MAP']
 const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
@@ -135,6 +135,7 @@ class MudSession {
   private state: MudState = {}
   private msdpInitialized = false
   private msdpVariables: MsdpVariableMap = normalizeMsdpVariableMap(defaultMsdpVariables)
+  private movementMapRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private readonly browserSocket: WebSocket
 
   constructor(browserSocket: WebSocket) {
@@ -161,12 +162,13 @@ class MudSession {
       },
       onMsdp: (variable, value) => {
         const partial = mapMsdpUpdate(variable, value, this.msdpVariables)
-        if (Object.keys(partial).length === 0) {
+        const stateUpdate = this.withLocalGraphicMapUpdate(partial)
+        if (Object.keys(stateUpdate).length === 0) {
           return
         }
 
-        this.state = { ...this.state, ...partial }
-        this.send({ type: 'state', state: partial })
+        this.state = { ...this.state, ...stateUpdate }
+        this.send({ type: 'state', state: stateUpdate })
       },
       onMsdpReady: () => {
         if (this.msdpInitialized) {
@@ -279,7 +281,30 @@ class MudSession {
       return
     }
 
-    const mapVariables = new Set([this.msdpVariables.graphicMap.trim(), this.msdpVariables.minimap.trim()])
+    this.sendMapRefreshRequest()
+
+    if (this.movementMapRefreshTimer) {
+      clearTimeout(this.movementMapRefreshTimer)
+    }
+
+    this.movementMapRefreshTimer = setTimeout(() => {
+      this.movementMapRefreshTimer = null
+      this.sendMapRefreshRequest()
+    }, 200)
+  }
+
+  private sendMapRefreshRequest() {
+    if (!this.msdpInitialized) {
+      return
+    }
+
+    const mapVariables = new Set([
+      'GRAPHIC_MAP',
+      'MINIMAP',
+      'AUTOMAP',
+      this.msdpVariables.graphicMap.trim(),
+      this.msdpVariables.minimap.trim(),
+    ])
 
     for (const variable of mapVariables) {
       if (!variable) {
@@ -299,9 +324,27 @@ class MudSession {
   }
 
   private cleanupSocket() {
+    if (this.movementMapRefreshTimer) {
+      clearTimeout(this.movementMapRefreshTimer)
+      this.movementMapRefreshTimer = null
+    }
+
     this.parser = null
     this.mudSocket = null
     this.msdpInitialized = false
+  }
+
+  private withLocalGraphicMapUpdate(partial: Partial<MudState>) {
+    if (partial.graphicMap || partial.roomVnum === undefined || !this.state.graphicMap) {
+      return partial
+    }
+
+    const graphicMap = recenterGraphicMapData(this.state.graphicMap, partial.roomVnum)
+    if (!graphicMap) {
+      return partial
+    }
+
+    return { ...partial, graphicMap }
   }
 
   private send(message: ServerMessage) {
@@ -717,8 +760,14 @@ function resolveMsdpVariableKey(variable: string, msdpVariables: MsdpVariableMap
 }
 
 function mapMsdpUpdate(variable: string, value: MudValue, msdpVariables: MsdpVariableMap): Partial<MudState> {
-  if (variable.trim().toUpperCase() === 'ROOM') {
+  const normalizedVariable = variable.trim().toUpperCase()
+
+  if (normalizedVariable === 'ROOM') {
     return mapRoomMsdpUpdate(value)
+  }
+
+  if (normalizedVariable === 'ROOM_VNUM') {
+    return { roomVnum: toOptionalNumber(value) }
   }
 
   const key = resolveMsdpVariableKey(variable, msdpVariables)
@@ -971,6 +1020,48 @@ function normalizeGraphicMapData(value: MudValue) {
         sp: toOptionalString(getMudRecordValue(room, 'sp')),
         c: toOptionalNumber(getMudRecordValue(room, 'c')),
       })),
+  }
+}
+
+function recenterGraphicMapData(graphicMap: MudState['graphicMap'], roomVnum: number) {
+  if (!graphicMap?.rooms?.length) {
+    return null
+  }
+
+  const currentRoom = graphicMap.rooms.find(
+    (room) =>
+      room.v === roomVnum &&
+      typeof room.x === 'number' &&
+      Number.isFinite(room.x) &&
+      typeof room.y === 'number' &&
+      Number.isFinite(room.y),
+  )
+
+  if (!currentRoom || currentRoom.x === 0 && currentRoom.y === 0) {
+    return null
+  }
+
+  const offsetX = Number(currentRoom.x)
+  const offsetY = Number(currentRoom.y)
+
+  return {
+    ...graphicMap,
+    rooms: graphicMap.rooms.map((room) => {
+      if (
+        typeof room.x !== 'number' ||
+        !Number.isFinite(room.x) ||
+        typeof room.y !== 'number' ||
+        !Number.isFinite(room.y)
+      ) {
+        return { ...room }
+      }
+
+      return {
+        ...room,
+        x: room.x - offsetX,
+        y: room.y - offsetY,
+      }
+    }),
   }
 }
 
