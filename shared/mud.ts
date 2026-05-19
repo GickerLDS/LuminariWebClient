@@ -132,8 +132,40 @@ export const defaultMsdpVariables = {
   tankHealthMax: 'TANK_HEALTH_MAX',
 } as const
 
+type MovementCommandDefinition = {
+  command: string
+  aliases: string[]
+  minPrefixLength: number
+}
+
+const MOVEMENT_COMMANDS: MovementCommandDefinition[] = [
+  { command: 'north', aliases: ['n'], minPrefixLength: 1 },
+  { command: 'east', aliases: ['e'], minPrefixLength: 1 },
+  { command: 'south', aliases: ['s'], minPrefixLength: 1 },
+  { command: 'west', aliases: ['w'], minPrefixLength: 1 },
+  { command: 'up', aliases: ['u'], minPrefixLength: 1 },
+  { command: 'down', aliases: ['d'], minPrefixLength: 1 },
+  { command: 'northeast', aliases: ['ne'], minPrefixLength: 6 },
+  { command: 'southeast', aliases: ['se'], minPrefixLength: 6 },
+  { command: 'southwest', aliases: ['sw'], minPrefixLength: 6 },
+  { command: 'northwest', aliases: ['nw'], minPrefixLength: 6 },
+  { command: 'inside', aliases: ['in'], minPrefixLength: 2 },
+  { command: 'outside', aliases: ['out'], minPrefixLength: 3 },
+]
+
+const MOVEMENT_COMMAND_INPUTS = new Set(
+  MOVEMENT_COMMANDS.flatMap(({ command, aliases, minPrefixLength }) => [
+    ...aliases,
+    ...buildCommandPrefixes(command, minPrefixLength),
+  ]),
+)
+
 export type MsdpVariableKey = keyof typeof defaultMsdpVariables
 export type MsdpVariableMap = Record<MsdpVariableKey, string>
+
+export function isMovementCommandInput(text: string) {
+  return MOVEMENT_COMMAND_INPUTS.has(text.trim().toLowerCase())
+}
 
 export function normalizeMsdpVariableMap(value: unknown): MsdpVariableMap {
   const raw = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -179,6 +211,17 @@ export function normalizeMsdpVariableMap(value: unknown): MsdpVariableMap {
     tankHealth: normalizeMsdpVariableValue(raw.tankHealth, defaultMsdpVariables.tankHealth),
     tankHealthMax: normalizeMsdpVariableValue(raw.tankHealthMax, defaultMsdpVariables.tankHealthMax),
   }
+}
+
+function buildCommandPrefixes(command: string, minPrefixLength: number) {
+  const prefixes: string[] = []
+  const start = Math.min(Math.max(1, minPrefixLength), command.length)
+
+  for (let length = start; length <= command.length; length += 1) {
+    prefixes.push(command.slice(0, length))
+  }
+
+  return prefixes
 }
 
 function normalizeMsdpVariableValue(value: unknown, fallback: string) {

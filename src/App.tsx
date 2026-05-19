@@ -6,6 +6,7 @@ import { appSettings } from '../shared/app-settings.ts'
 import type { AppSettings } from '../shared/app-settings.ts'
 import {
   defaultMsdpVariables,
+  isMovementCommandInput,
   normalizeMsdpVariableMap,
 } from '../shared/mud.ts'
 import type {
@@ -81,30 +82,6 @@ const LUMINARI_COLOR_CODES: Record<string, string> = {
   '=': '\u001b[7m',
   '*': '@',
 }
-const MOVEMENT_COMMANDS = new Set([
-  'n',
-  'north',
-  's',
-  'south',
-  'e',
-  'east',
-  'w',
-  'west',
-  'ne',
-  'northeast',
-  'nw',
-  'northwest',
-  'se',
-  'southeast',
-  'sw',
-  'southwest',
-  'u',
-  'up',
-  'd',
-  'down',
-  'in',
-  'out',
-])
 const NUMPAD_COMMANDS: Record<string, string> = {
   Numpad1: 'sw',
   Numpad2: 's',
@@ -539,8 +516,7 @@ function App() {
   )
 
   const rememberCommand = useCallback((text: string) => {
-    const normalized = text.trim().toLowerCase()
-    if (!normalized || MOVEMENT_COMMANDS.has(normalized)) {
+    if (!text.trim() || isMovementCommandInput(text)) {
       return
     }
 

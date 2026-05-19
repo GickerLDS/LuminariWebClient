@@ -9,6 +9,7 @@ import type { RawData } from 'ws'
 import { appSettings } from '../shared/app-settings.ts'
 import {
   defaultMsdpVariables,
+  isMovementCommandInput,
   normalizeMsdpVariableMap,
 } from '../shared/mud.ts'
 import type {
@@ -57,30 +58,6 @@ const CONTROL_BYTES = new Set([
   MSDP_ARRAY_CLOSE,
 ])
 const REQUIRED_MSDP_VARIABLES = ['ROOM']
-const MOVEMENT_COMMANDS = new Set([
-  'n',
-  'north',
-  's',
-  'south',
-  'e',
-  'east',
-  'w',
-  'west',
-  'ne',
-  'northeast',
-  'nw',
-  'northwest',
-  'se',
-  'southeast',
-  'sw',
-  'southwest',
-  'u',
-  'up',
-  'd',
-  'down',
-  'in',
-  'out',
-])
 const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
@@ -247,12 +224,10 @@ class MudSession {
       return
     }
 
-    const normalizedInput = text.trim().toLowerCase()
-
     this.mudSocket.write(text.endsWith('\n') ? text : `${text}\n`)
     this.requestStateRefresh()
 
-    if (MOVEMENT_COMMANDS.has(normalizedInput)) {
+    if (isMovementCommandInput(text)) {
       this.requestMovementMapRefresh()
     }
   }
