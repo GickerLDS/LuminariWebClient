@@ -3538,16 +3538,29 @@ function renderQuestNode(value: MudValue): ReactNode {
       <div className="quest-compact-list">
         {compactQuests.map((quest, index) => (
           <div className="quest-compact-item" key={`${quest.name ?? 'quest'}-${index}`}>
-            {quest.name ? (
-              <div dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.name) }} />
-            ) : null}
+            {quest.name ? <div className="quest-compact-name" dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.name) }} /> : null}
             {quest.type ? (
-              <div dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.type) }} />
+              <div className="quest-compact-type">
+                <span dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.type) }} />
+                {quest.progress ? <span>: {quest.progress.label}</span> : null}
+              </div>
+            ) : quest.progress ? (
+              <div className="quest-compact-type">Progress: {quest.progress.label}</div>
             ) : null}
-            {quest.vnum ? <div>{quest.vnum}</div> : null}
-            {quest.progress ? <div>{quest.progress}</div> : null}
+            {quest.progress ? (
+              <div
+                className="quest-progress-bar"
+                role="progressbar"
+                aria-label={`Quest progress ${quest.progress.label}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(quest.progress.percentage)}
+              >
+                <div className="quest-progress-bar-fill" style={{ width: `${quest.progress.percentage}%` }} />
+              </div>
+            ) : null}
             {quest.targets ? (
-              <div dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.targets) }} />
+              <div className="quest-compact-targets" dangerouslySetInnerHTML={{ __html: renderMudHtml(quest.targets) }} />
             ) : null}
           </div>
         ))}
@@ -3616,9 +3629,13 @@ function renderQuestNode(value: MudValue): ReactNode {
 type QuestEntry = {
   name?: string
   type?: string
-  vnum?: string
-  progress?: string
+  progress?: QuestProgress
   targets?: string
+}
+
+type QuestProgress = {
+  label: string
+  percentage: number
 }
 
 function parseQuestEntries(value: MudValue): QuestEntry[] {
@@ -3630,20 +3647,11 @@ function parseQuestEntries(value: MudValue): QuestEntry[] {
     }
 
     const name = asOptionalText(readAnyKey(entry, ['name', 'NAME']))
-    const type = asOptionalText(readAnyKey(entry, ['type', 'TYPE']))
-
-    const rawVnum = readAnyKey(entry, ['vnum', 'VNUM'])
-    const vnum =
-      rawVnum === undefined || rawVnum === null
-        ? undefined
-        : typeof rawVnum === 'number'
-          ? String(Math.trunc(rawVnum))
-          : String(rawVnum).replace(/,/g, '')
-
+    const type = sanitizeQuestType(asOptionalText(readAnyKey(entry, ['type', 'TYPE'])))
     const progress = formatQuestProgress(readAnyKey(entry, ['progress', 'PROGRESS']))
     const targets = formatQuestTargets(readAnyKey(entry, ['targets', 'TARGETS']))
 
-    if (!name && !type && !vnum && !progress && !targets) {
+    if (!name && !type && !progress && !targets) {
       return []
     }
 
@@ -3651,7 +3659,6 @@ function parseQuestEntries(value: MudValue): QuestEntry[] {
       {
         name,
         type,
-        vnum,
         progress,
         targets,
       },
@@ -3659,7 +3666,7 @@ function parseQuestEntries(value: MudValue): QuestEntry[] {
   })
 }
 
-function formatQuestProgress(value: MudValue | undefined): string | undefined {
+function formatQuestProgress(value: MudValue | undefined): QuestProgress | undefined {
   if (!isMudRecord(value)) {
     return undefined
   }
@@ -3670,7 +3677,17 @@ function formatQuestProgress(value: MudValue | undefined): string | undefined {
     return undefined
   }
 
-  return `${completed}/${required}`
+  const completedCount = Number.parseInt(completed, 10)
+  const requiredCount = Number.parseInt(required, 10)
+  const percentage =
+    Number.isFinite(completedCount) && Number.isFinite(requiredCount) && requiredCount > 0
+      ? Math.max(0, Math.min((completedCount / requiredCount) * 100, 100))
+      : 0
+
+  return {
+    label: `${completed}/${required}`,
+    percentage,
+  }
 }
 
 function formatQuestTargets(value: MudValue | undefined): string | undefined {
@@ -3726,7 +3743,7 @@ function normalizeQuestValue(value: MudValue): MudValue {
 }
 
 function isMudValue(value: unknown): value is MudValue {
-  if (value === null) {
+  if (value === null || value === undefined) {
     return true
   }
 
@@ -3739,7 +3756,7 @@ function isMudValue(value: unknown): value is MudValue {
   }
 
   if (typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).every((entry) => isMudValue(entry))
+    return Object.values(value).every((entry) => isMudValue(entry))
   }
 
   return false
@@ -3771,7 +3788,15 @@ function readAnyKey(record: Record<string, MudValue>, keys: string[]): MudValue 
   return undefined
 }
 
-function asOptionalText(value: MudValue | undefined): string | undefined {
+function sanitizeQuestType(value: string | undefined) {
+  if (!value) {
+    return undefined
+  }
+
+  return value.replace(/\s*\(?comma separated values\)?/i, '').trim()
+}
+
+function asOptionalText(value: MudValue | undefined) {
   if (value === undefined || value === null) {
     return undefined
   }
@@ -4165,7 +4190,7 @@ const GRAPHIC_MAP_OPPOSITE_DIRECTIONS: Record<GraphicMapDirection, GraphicMapDir
   sw: 'ne',
 }
 
-const GRAPHIC_MAP_DIRECTION_OFFSETS: Record<GraphicMapDirection, [number, number]> = {
+const GRAPHIC_MAP_DIRECTION_OFFSETS: Record<GraphicMapDirection, readonly [number, number]> = {
   n: [0, -1],
   e: [1, 0],
   s: [0, 1],
