@@ -79,6 +79,7 @@
 .connection-form span,
 .command-form span,
 .automation-fields span,
+.key-binding-fields span,
 .settings-fields span,
 .msdp-vars-grid span {
   font-size: 0.72rem;
@@ -93,6 +94,7 @@
 .command-form input,
 .command-form button,
 .automation-fields input,
+.key-binding-fields input,
 .settings-fields input,
 .settings-fields select,
 .msdp-vars-grid input,
@@ -412,6 +414,23 @@
 .automation-fields textarea {
   resize: vertical;
   min-height: 4.9rem;
+}
+
+.key-binding-fields {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.85fr) minmax(10rem, 1.15fr);
+  gap: 0.7rem;
+}
+
+.key-binding-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.key-binding-key-input {
+  cursor: pointer;
 }
 
 .settings-fields {
@@ -1421,6 +1440,7 @@
   }
 
   .automation-fields,
+  .key-binding-fields,
   .settings-fields,
   .msdp-vars-grid {
     grid-template-columns: 1fr;
@@ -1489,6 +1509,7 @@
   .command-form input,
   .command-form button,
   .automation-fields input,
+  .key-binding-fields input,
   .settings-fields input,
   .settings-fields select,
   .msdp-vars-grid input,

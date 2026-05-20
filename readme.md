@@ -21,7 +21,7 @@ LuminariWebClient is a web-based MUD client for **LuminariMUD-compatible** games
   - If `TITLE` contains the character name, shows the title only
   - If `TITLE` is set but does not contain the character name, shows `Name Title`
   - If `TITLE` is not set, shows the character name alone
-- Numpad movement support
+- Customizable key bindings with default numpad movement and look mappings
 - Command history with ArrowUp / ArrowDown
 - Tab completion: pressing Tab autocompletes from the most recent matching command in history
 - Movement commands excluded from command history

@@ -84,20 +84,44 @@ const LUMINARI_COLOR_CODES: Record<string, string> = {
   '=': '\u001b[7m',
   '*': '@',
 }
-const NUMPAD_COMMANDS: Record<string, string> = {
-  Numpad1: 'sw',
-  Numpad2: 's',
-  Numpad3: 'se',
-  Numpad4: 'w',
-  Numpad5: 'look',
-  Numpad6: 'e',
-  Numpad7: 'nw',
-  Numpad8: 'n',
-  Numpad9: 'ne',
-  NumpadAdd: 'down',
-  NumpadSubtract: 'up',
-  Numpad0: 'in',
-  NumpadDecimal: 'out',
+type KeyBindingDefinition = {
+  id: string
+  code: string
+  key: string
+  command: string
+  enabled: boolean
+}
+
+const DEFAULT_KEY_BINDINGS: KeyBindingDefinition[] = [
+  { id: 'keybind-numpad-1', code: 'Numpad1', key: '1', command: 'sw', enabled: true },
+  { id: 'keybind-numpad-2', code: 'Numpad2', key: '2', command: 's', enabled: true },
+  { id: 'keybind-numpad-3', code: 'Numpad3', key: '3', command: 'se', enabled: true },
+  { id: 'keybind-numpad-4', code: 'Numpad4', key: '4', command: 'w', enabled: true },
+  { id: 'keybind-numpad-5', code: 'Numpad5', key: '5', command: 'look', enabled: true },
+  { id: 'keybind-numpad-6', code: 'Numpad6', key: '6', command: 'e', enabled: true },
+  { id: 'keybind-numpad-7', code: 'Numpad7', key: '7', command: 'nw', enabled: true },
+  { id: 'keybind-numpad-8', code: 'Numpad8', key: '8', command: 'n', enabled: true },
+  { id: 'keybind-numpad-9', code: 'Numpad9', key: '9', command: 'ne', enabled: true },
+  { id: 'keybind-numpad-add', code: 'NumpadAdd', key: '+', command: 'down', enabled: true },
+  { id: 'keybind-numpad-subtract', code: 'NumpadSubtract', key: '-', command: 'up', enabled: true },
+  { id: 'keybind-numpad-0', code: 'Numpad0', key: '0', command: 'in', enabled: true },
+  { id: 'keybind-numpad-decimal', code: 'NumpadDecimal', key: '.', command: 'out', enabled: true },
+]
+
+const KEY_CODE_LABELS: Record<string, string> = {
+  Numpad0: 'Numpad 0',
+  Numpad1: 'Numpad 1',
+  Numpad2: 'Numpad 2',
+  Numpad3: 'Numpad 3',
+  Numpad4: 'Numpad 4',
+  Numpad5: 'Numpad 5',
+  Numpad6: 'Numpad 6',
+  Numpad7: 'Numpad 7',
+  Numpad8: 'Numpad 8',
+  Numpad9: 'Numpad 9',
+  NumpadAdd: 'Numpad +',
+  NumpadSubtract: 'Numpad -',
+  NumpadDecimal: 'Numpad .',
 }
 
 type BarConfig = {
@@ -174,6 +198,7 @@ type ClientSettings = {
     fontFamily: SidebarFontFamily
     fontSize: number
   }
+  keyBindings: KeyBindingDefinition[]
   msdp: MsdpVariableMap
 }
 
@@ -182,7 +207,7 @@ type AutomationNotice = {
   text: string
 }
 
-type AutomationMenuId = 'aliases' | 'triggers' | 'msdpVars' | 'settings'
+type AutomationMenuId = 'aliases' | 'triggers' | 'keyBindings' | 'msdpVars' | 'settings'
 
 const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
   connection: {
@@ -207,6 +232,7 @@ const DEFAULT_CLIENT_SETTINGS: ClientSettings = {
     fontFamily: 'mono',
     fontSize: 13,
   },
+  keyBindings: getDefaultKeyBindings(),
   msdp: normalizeMsdpVariableMap(defaultMsdpVariables),
 }
 
@@ -811,12 +837,22 @@ function App() {
     }
 
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) {
+        return
+      }
+
       if (event.altKey || event.ctrlKey || event.metaKey) {
         return
       }
 
-      const command = NUMPAD_COMMANDS[event.code]
-      if (!command) {
+      if (shouldIgnoreKeyBindingTarget(event.target, commandInputRef.current)) {
+        return
+      }
+
+      const keyBinding = clientSettings.keyBindings.find(
+        (binding) => binding.enabled && binding.code === event.code && binding.command.trim(),
+      )
+      if (!keyBinding) {
         return
       }
 
@@ -824,7 +860,7 @@ function App() {
       setHistoryIndex(null)
       setHistoryDraft('')
       setCommand('')
-      dispatchInputText(command)
+      dispatchInputText(keyBinding.command)
       focusCommandInput(commandInputRef.current)
     }
 
@@ -832,7 +868,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [connected, dispatchInputText])
+  }, [clientSettings.keyBindings, connected, dispatchInputText])
 
   function handleConnectionSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -973,17 +1009,100 @@ function App() {
     )
   }
 
+  function updateKeyBinding(keyBindingId: string, updates: Partial<KeyBindingDefinition>) {
+    setClientSettings((current) => ({
+      ...current,
+      keyBindings: current.keyBindings.map((binding) =>
+        binding.id === keyBindingId
+          ? {
+              ...binding,
+              ...updates,
+              command: updates.command !== undefined ? updates.command : binding.command,
+            }
+          : binding,
+      ),
+    }))
+    setAutomationNotice(null)
+  }
+
   function toggleAutomationMenu(menuId: AutomationMenuId) {
     setOpenAutomationMenu((current) => (current === menuId ? null : menuId))
   }
 
   function handleAddAlias() {
-    setAliases((current) => [...current, createEmptyAlias()])
+    setAliases((current) => [createEmptyAlias(), ...current])
     setAutomationNotice(null)
   }
 
   function handleAddTrigger() {
-    setTriggers((current) => [...current, createEmptyTrigger()])
+    setTriggers((current) => [createEmptyTrigger(), ...current])
+    setAutomationNotice(null)
+  }
+
+  function handleAddKeyBinding() {
+    setClientSettings((current) => ({
+      ...current,
+      keyBindings: [createEmptyKeyBinding(), ...current.keyBindings],
+    }))
+    setAutomationNotice(null)
+  }
+
+  function handleResetKeyBindings() {
+    setClientSettings((current) => ({
+      ...current,
+      keyBindings: getDefaultKeyBindings(),
+    }))
+    setAutomationNotice({
+      kind: 'success',
+      text: 'Restored the default numpad movement and look key bindings.',
+    })
+  }
+
+  function handleKeyBindingCapture(event: ReactKeyboardEvent<HTMLInputElement>, keyBindingId: string) {
+    if (event.key === 'Tab') {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (event.key === 'Escape') {
+      event.currentTarget.blur()
+      return
+    }
+
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      updateKeyBinding(keyBindingId, { code: '', key: '' })
+      return
+    }
+
+    const nextCode = event.code
+    if (!nextCode) {
+      return
+    }
+
+    setClientSettings((current) => ({
+      ...current,
+      keyBindings: current.keyBindings.map((binding) => {
+        if (binding.id === keyBindingId) {
+          return {
+            ...binding,
+            code: nextCode,
+            key: event.key,
+          }
+        }
+
+        if (binding.code === nextCode) {
+          return {
+            ...binding,
+            code: '',
+            key: '',
+          }
+        }
+
+        return binding
+      }),
+    }))
     setAutomationNotice(null)
   }
 
@@ -1302,6 +1421,100 @@ function App() {
           <div className="window-menu-item">
             <button
               type="button"
+              className={`window-menu-link${openAutomationMenu === 'keyBindings' ? ' window-menu-link-open' : ''}`}
+              aria-expanded={openAutomationMenu === 'keyBindings'}
+              onClick={() => toggleAutomationMenu('keyBindings')}
+            >
+              Key Bindings
+            </button>
+
+            {openAutomationMenu === 'keyBindings' ? (
+              <div className="window-menu-dropdown">
+                <div className="automation-menu-content">
+                  <div className="automation-section-header">
+                    <div>
+                      <h3>Key Bindings</h3>
+                      <p>Map keys to commands that are sent while you are connected.</p>
+                    </div>
+
+                    <div className="automation-actions">
+                      <button type="button" onClick={handleAddKeyBinding}>
+                        Add
+                      </button>
+                      <button type="button" onClick={handleResetKeyBindings}>
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="automation-menu-help">
+                    Click a key field and press a key to capture it. Backspace or Delete clears a key.
+                  </p>
+
+                  {clientSettings.keyBindings.length === 0 ? (
+                    <p className="automation-empty">No key bindings saved yet.</p>
+                  ) : (
+                    <div className="automation-list">
+                      {clientSettings.keyBindings.map((binding) => (
+                        <div key={binding.id} className="automation-item">
+                          <div className="automation-item-header">
+                            <label className="automation-toggle">
+                              <input
+                                type="checkbox"
+                                checked={binding.enabled}
+                                onChange={(event) => updateKeyBinding(binding.id, { enabled: event.target.checked })}
+                              />
+                              <span>{binding.enabled ? 'Enabled' : 'Disabled'}</span>
+                            </label>
+
+                            <button
+                              type="button"
+                              className="automation-delete"
+                              onClick={() =>
+                                setClientSettings((current) => ({
+                                  ...current,
+                                  keyBindings: current.keyBindings.filter((entry) => entry.id !== binding.id),
+                                }))
+                              }
+                            >
+                              Delete
+                            </button>
+                          </div>
+
+                          <div className="key-binding-fields">
+                            <label>
+                              <span>Key</span>
+                              <input
+                                className="key-binding-key-input"
+                                value={formatKeyBindingLabel(binding)}
+                                onKeyDown={(event) => handleKeyBindingCapture(event, binding.id)}
+                                onFocus={(event) => event.currentTarget.select()}
+                                readOnly
+                                aria-label={`Key for command ${binding.command || 'without command'}`}
+                              />
+                            </label>
+
+                            <label>
+                              <span>Command</span>
+                              <input
+                                value={binding.command}
+                                onChange={(event) => updateKeyBinding(binding.id, { command: event.target.value })}
+                                placeholder="look"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="window-menu-item">
+            <button
+              type="button"
               className={`window-menu-link${openAutomationMenu === 'msdpVars' ? ' window-menu-link-open' : ''}`}
               aria-expanded={openAutomationMenu === 'msdpVars'}
               onClick={() => toggleAutomationMenu('msdpVars')}
@@ -1381,7 +1594,7 @@ function App() {
                   </div>
 
                   <p className="automation-menu-help">
-                    Saved config files include display settings, MSDP variable mappings, aliases, and triggers.
+                    Saved config files include display settings, key bindings, MSDP variable mappings, aliases, and triggers.
                   </p>
 
                   <div className="settings-list">
@@ -2005,6 +2218,48 @@ function createEmptyTrigger(): TriggerDefinition {
   }
 }
 
+function createEmptyKeyBinding(): KeyBindingDefinition {
+  return {
+    id: createAutomationId('keybind'),
+    code: '',
+    key: '',
+    command: '',
+    enabled: true,
+  }
+}
+
+function getDefaultKeyBindings(): KeyBindingDefinition[] {
+  return DEFAULT_KEY_BINDINGS.map((binding) => ({ ...binding }))
+}
+
+function formatKeyBindingLabel(binding: KeyBindingDefinition) {
+  if (!binding.code) {
+    return 'Press a key'
+  }
+
+  return KEY_CODE_LABELS[binding.code] ?? formatKeyboardCode(binding.code)
+}
+
+function formatKeyboardCode(code: string) {
+  if (code.startsWith('Key') && code.length === 4) {
+    return code.slice(3)
+  }
+
+  if (code.startsWith('Digit') && code.length === 6) {
+    return code.slice(5)
+  }
+
+  if (code === 'Space') {
+    return 'Space'
+  }
+
+  if (code.startsWith('Arrow')) {
+    return code.replace('Arrow', 'Arrow ')
+  }
+
+  return code.replace(/([a-z])([A-Z])/g, '$1 $2')
+}
+
 function createAutomationId(prefix: string) {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `${prefix}-${crypto.randomUUID()}`
@@ -2374,6 +2629,7 @@ function normalizeClientSettings(value: unknown, emptyStateMessage?: string): Cl
         : DEFAULT_CLIENT_SETTINGS.sidebar.fontFamily,
       fontSize: clampNumber(readNumericSetting(sidebarRecord?.fontSize), 8, 32, DEFAULT_CLIENT_SETTINGS.sidebar.fontSize),
     },
+    keyBindings: normalizeKeyBindings(record.keyBindings),
     msdp: normalizeMsdpVariableMap(record.msdp),
   }
 }
@@ -2400,6 +2656,18 @@ function normalizeTriggers(value: unknown, emptyStateMessage?: string): TriggerD
   }
 
   return value.map((entry, index) => normalizeTriggerEntry(entry, index))
+}
+
+function normalizeKeyBindings(value: unknown): KeyBindingDefinition[] {
+  if (value === undefined) {
+    return getDefaultKeyBindings()
+  }
+
+  if (!Array.isArray(value)) {
+    return getDefaultKeyBindings()
+  }
+
+  return value.map((entry, index) => normalizeKeyBindingEntry(entry, index)).filter((entry) => entry !== null)
 }
 
 function normalizeAliasEntry(value: unknown, index: number): AliasDefinition {
@@ -2440,6 +2708,24 @@ function normalizeTriggerEntry(value: unknown, index: number): TriggerDefinition
     id: readOptionalString(record, ['id'])?.trim() || createAutomationId('trigger'),
     pattern,
     action,
+    enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
+  }
+}
+
+function normalizeKeyBindingEntry(value: unknown, index: number): KeyBindingDefinition | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+  const code = readOptionalString(record, ['code'])?.trim() ?? ''
+  const command = readOptionalString(record, ['command', 'action', 'input'])?.trim() ?? ''
+
+  return {
+    id: readOptionalString(record, ['id'])?.trim() || `keybind-imported-${index + 1}`,
+    code,
+    key: readOptionalString(record, ['key']) ?? '',
+    command,
     enabled: typeof record.enabled === 'boolean' ? record.enabled : true,
   }
 }
@@ -4656,6 +4942,18 @@ function shouldPreservePointerFocus(target: EventTarget | null) {
       'input, textarea, select, button, label, a, summary, [data-prevent-command-focus], [contenteditable="true"]',
     ),
   )
+}
+
+function shouldIgnoreKeyBindingTarget(target: EventTarget | null, commandInput: HTMLInputElement | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  if (target === commandInput) {
+    return false
+  }
+
+  return Boolean(target.closest('input, textarea, select, button, [contenteditable="true"]'))
 }
 
 function hasExpandedSelection() {
