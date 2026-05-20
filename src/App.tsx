@@ -2775,9 +2775,8 @@ type AffectEntry = {
   nameText: string
   isNameMissing: boolean
   durationText?: string
-  detailText?: string
-  rawText?: string
-  unknownFieldsText?: string
+  detailLines: string[]
+  supplementaryLines: string[]
 }
 
 function AffectsPanel({ value }: AffectsPanelProps) {
@@ -2785,7 +2784,7 @@ function AffectsPanel({ value }: AffectsPanelProps) {
     return <EmptyTabMessage message="No affects reported yet." />
   }
 
-  const affects = parseAffectEntries(value)
+  const affects = mergeAffectEntries(parseAffectEntries(value))
 
   if (affects.length === 0) {
     return <MudValuePanel value={value} emptyMessage="No affects reported yet." />
@@ -2815,16 +2814,25 @@ function AffectRow({ affect }: { affect: AffectEntry }) {
         {affect.durationText ? <span className="affect-duration-badge">{affect.durationText}</span> : null}
       </div>
 
-      {affect.detailText ? (
-        <div className="affect-detail-line">
-          <span>Details</span>
-          <strong>{affect.detailText}</strong>
+      {affect.detailLines.length > 0 ? (
+        <div className="affect-detail-list">
+          {affect.detailLines.map((line, index) => (
+            <p key={`${line}-${index}`} className="affect-detail-line">
+              {line}
+            </p>
+          ))}
         </div>
       ) : null}
 
-      {affect.rawText ? <p className="affect-raw-text">{affect.rawText}</p> : null}
-
-      {affect.unknownFieldsText ? <p className="affect-unknown-fields">Other: {affect.unknownFieldsText}</p> : null}
+      {affect.supplementaryLines.length > 0 ? (
+        <div className="affect-note-list">
+          {affect.supplementaryLines.map((line, index) => (
+            <p key={`${line}-${index}`} className={line.startsWith('Other: ') ? 'affect-unknown-fields' : 'affect-raw-text'}>
+              {line}
+            </p>
+          ))}
+        </div>
+      ) : null}
     </article>
   )
 }
@@ -3026,7 +3034,7 @@ function parseAffectEntries(value: MudValue): AffectEntry[] {
 
   if (typeof value === 'number' || typeof value === 'boolean') {
     const text = formatMudValueAsText(value)
-    return text ? [{ nameText: text, isNameMissing: false }] : []
+    return text ? [{ nameText: text, isNameMissing: false, detailLines: [], supplementaryLines: [] }] : []
   }
 
   if (Array.isArray(value)) {
@@ -3061,7 +3069,8 @@ function parseAffectValueEntry(value: MudValue, fallbackName?: string): AffectEn
       {
         nameText: label ?? text,
         isNameMissing: !label,
-        detailText: label ? text : undefined,
+        detailLines: label ? [text] : [],
+        supplementaryLines: [],
       },
     ]
   }
@@ -3096,9 +3105,12 @@ function parseAffectRecord(record: Record<string, MudValue>, fallbackName?: stri
   const location = asOptionalText(
     readAnyKey(record, ['location', 'LOCATION', 'apply', 'APPLY', 'stat', 'STAT', 'where', 'WHERE', 'target', 'TARGET']),
   )
+  const bonusType = asOptionalText(
+    readAnyKey(record, ['bonus_type', 'BONUS_TYPE', 'bonusType', 'BONUSTYPE', 'type_name', 'TYPE_NAME']),
+  )
   const status = asOptionalText(readAnyKey(record, ['status', 'STATUS', 'state', 'STATE']))
   const rawText = asOptionalText(readAnyKey(record, ['raw', 'RAW', 'raw_text', 'RAW_TEXT', 'text', 'TEXT']))
-  const detailText = formatAffectDetail(status, location, modifier)
+  const detailText = formatAffectDetail(status, location, modifier, bonusType)
   const unknownFieldsText = formatUnknownAffectFields(record)
 
   if (!name && !duration && !detailText && !rawText && !unknownFieldsText) {
@@ -3109,9 +3121,10 @@ function parseAffectRecord(record: Record<string, MudValue>, fallbackName?: stri
     nameText: name ?? 'Unknown effect',
     isNameMissing: !name,
     durationText: duration,
-    detailText,
-    rawText,
-    unknownFieldsText,
+    detailLines: detailText ? [detailText] : [],
+    supplementaryLines: [rawText, unknownFieldsText ? `Other: ${unknownFieldsText}` : undefined].filter(
+      (line): line is string => Boolean(line),
+    ),
   }
 }
 
@@ -3127,7 +3140,8 @@ function buildAffectEntriesFromText(value: string, fallbackName?: string): Affec
       {
         nameText: fallbackLabel,
         isNameMissing: false,
-        detailText: entries[0],
+        detailLines: [entries[0]],
+        supplementaryLines: [],
       },
     ]
   }
@@ -3135,7 +3149,64 @@ function buildAffectEntriesFromText(value: string, fallbackName?: string): Affec
   return entries.map((entry) => ({
     nameText: entry,
     isNameMissing: false,
+    detailLines: [],
+    supplementaryLines: [],
   }))
+}
+
+function mergeAffectEntries(entries: AffectEntry[]) {
+  const mergedEntries: AffectEntry[] = []
+  const entriesByName = new Map<string, AffectEntry>()
+
+  for (const entry of entries) {
+    const groupingKey = entry.isNameMissing ? '' : entry.nameText.trim().toLowerCase()
+    if (!groupingKey) {
+      mergedEntries.push({
+        ...entry,
+        detailLines: [...entry.detailLines],
+        supplementaryLines: [...entry.supplementaryLines],
+      })
+      continue
+    }
+
+    const existingEntry = entriesByName.get(groupingKey)
+    if (!existingEntry) {
+      const clonedEntry = {
+        ...entry,
+        detailLines: [...entry.detailLines],
+        supplementaryLines: [...entry.supplementaryLines],
+      }
+      entriesByName.set(groupingKey, clonedEntry)
+      mergedEntries.push(clonedEntry)
+      continue
+    }
+
+    if (!existingEntry.durationText && entry.durationText) {
+      existingEntry.durationText = entry.durationText
+    } else if (
+      existingEntry.durationText &&
+      entry.durationText &&
+      entry.durationText !== existingEntry.durationText
+    ) {
+      appendUniqueAffectLine(existingEntry.supplementaryLines, `Duration: ${entry.durationText}`)
+    }
+
+    for (const line of entry.detailLines) {
+      appendUniqueAffectLine(existingEntry.detailLines, line)
+    }
+
+    for (const line of entry.supplementaryLines) {
+      appendUniqueAffectLine(existingEntry.supplementaryLines, line)
+    }
+  }
+
+  return mergedEntries
+}
+
+function appendUniqueAffectLine(lines: string[], line: string) {
+  if (!lines.includes(line)) {
+    lines.push(line)
+  }
 }
 
 function splitAffectTextEntries(value: string) {
@@ -3372,13 +3443,15 @@ function formatUnknownGroupFields(record: Record<string, MudValue>) {
   return entries.length > 0 ? entries.join(' | ') : undefined
 }
 
-function formatAffectDetail(status?: string, location?: string, modifier?: string) {
+function formatAffectDetail(status?: string, location?: string, modifier?: string, bonusType?: string) {
   const locationText =
     location && modifier
       ? `${location}: ${modifier}`
       : location || modifier
 
-  const detailParts = [status, locationText].filter((part): part is string => Boolean(part))
+  const bonusTypeText = bonusType ? `(${bonusType})` : undefined
+
+  const detailParts = [status, locationText, bonusTypeText].filter((part): part is string => Boolean(part))
   return detailParts.length > 0 ? detailParts.join(' · ') : undefined
 }
 
@@ -3422,6 +3495,12 @@ function formatUnknownAffectFields(record: Record<string, MudValue>) {
     'WHERE',
     'target',
     'TARGET',
+    'bonus_type',
+    'BONUS_TYPE',
+    'bonusType',
+    'BONUSTYPE',
+    'type_name',
+    'TYPE_NAME',
     'status',
     'STATUS',
     'state',
